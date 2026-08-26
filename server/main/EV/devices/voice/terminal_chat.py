@@ -270,11 +270,20 @@ def _start_local_voice_heartbeat(stop_event):
     def _loop():
         while not stop_event.is_set():
             enabled = _voice_enabled()
+            # 心跳要说的是「我还在听」，不只是「我这个进程还在」。
+            # 这两件事分开过一次代价：麦克风停摆 34 分钟，心跳线程照跳 listening=true，
+            # 控制面和监管线程都看不出异常。把距离上一帧的秒数一起报上去。
+            try:
+                from devices.voice import terminal_audio
+                silent = round(terminal_audio.mic_silent_seconds(), 1)
+            except Exception:
+                silent = None
             _publish_live_event({
                 "type": "heartbeat",
                 "pid": os.getpid(),
                 "listening": enabled,
                 "standby": not enabled,
+                "mic_silent_s": silent,
             })
             stop_event.wait(2.0)
 

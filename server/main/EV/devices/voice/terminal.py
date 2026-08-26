@@ -145,6 +145,11 @@ MAX_UTT_FRAMES = _st.MAX_UTT_FRAMES
 GREET = _st.GREET
 GREET_TEXT = _st.GREET_TEXT
 GREET_COOLDOWN = _st.GREET_COOLDOWN
+# 看门狗：麦克风多久没喂帧就判定停摆。
+# 正常情况下每 20ms 一帧，静音也照喂（只是 RMS 低），所以 15 秒没有任何一帧
+# 一定是坏了，不会误伤安静环境。重开这么多次还不行就退出，交给主进程重启。
+MIC_STALL_SECONDS = float(os.environ.get("VOICE_MIC_STALL_SECONDS", "15"))
+MIC_STALL_GIVE_UP = int(os.environ.get("VOICE_MIC_STALL_GIVE_UP", "3"))
 _LISTEN_MUTE_AFTER_PLAY = _st._LISTEN_MUTE_AFTER_PLAY
 MUSE = _st.MUSE
 AGENT_ID = _st.AGENT_ID
@@ -308,6 +313,8 @@ def main():
         threading.Thread(target=_greeter, args=(tts_provider, tts_overrides), daemon=True).start()
 
     ring = collections.deque(maxlen=PADDING)
+    mic_stall_restarts = 0
+    terminal_audio.note_mic_frame()
     triggered = False
     voiced = []
     stream_turn_active = False
@@ -350,7 +357,43 @@ def main():
                     stream_asr.preconnect()
             try:
                 frame = q.get(timeout=5)
+                terminal_audio.note_mic_frame()
+                mic_stall_restarts = 0
             except queue.Empty:
+                # 看门狗：流「活着」但一帧都不来，也是坏了。
+                # poll() 只看 PortAudio 的 stream.active，回调停了它照样返回正常，
+                # 于是下面那套重连逻辑一次都不会触发（真实事故：播放时音频设备报
+                # -10851 回退默认扬声器之后，麦克风再没喂过帧，进程活着、心跳照跳、
+                # 麦克风心跳日志静默 34 分钟，只能人工重启）。
+                # 只在「本该在采集」时判定：设备页开着麦、且确实选中了设备。
+                if (
+                    INPUT_MODE == "pc"
+                    and proc.poll() is None
+                    and getattr(proc, "devices_sig", "")
+                    and _feat("mic")
+                    and terminal_audio.mic_silent_seconds() >= MIC_STALL_SECONDS
+                ):
+                    mic_stall_restarts += 1
+                    log(
+                        "麦克风停摆 %.0fs（流仍报活着），第 %d 次重开"
+                        % (terminal_audio.mic_silent_seconds(), mic_stall_restarts)
+                    )
+                    try:
+                        proc.stop()
+                    except Exception:
+                        pass
+                    terminal_audio.note_mic_frame()  # 重置计时，别连着刷屏
+                    try:
+                        proc = _start_mic(q, stop)
+                        continue
+                    except Exception as exc:
+                        log("停摆后重开麦克风失败：%s" % exc)
+                    if mic_stall_restarts >= MIC_STALL_GIVE_UP:
+                        # 重开几次都救不回来，多半是音频子系统本身坏了。
+                        # 退出让主进程的监管线程整体重启，比留个聋着的进程强。
+                        log("麦克风连续 %d 次重开无效，退出交给监管线程重启整个语音终端"
+                            % mic_stall_restarts)
+                        raise SystemExit(17)
                 if proc.poll() is not None:
                     if INPUT_MODE == "pc":
                         try:

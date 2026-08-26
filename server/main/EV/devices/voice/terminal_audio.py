@@ -54,6 +54,31 @@ _MIXER_LAST_DIAG = time.time()
 _MIXER_ALIVE = False   # mixer 线程是否还活着
 _MIXER_EXC = None      # mixer 线程异常
 
+# 主循环最后一次真的拿到麦克风帧的时刻。
+# 为什么要单独记：PortAudio 的 stream.active 只说明流没被关，回调不再触发时它
+# 照样是 True，poll() 因此判活。真实事故：播放时 PaMacCore 报 -10851、回退默认
+# 扬声器之后，输入流再没喂过一帧，进程活着、心跳照跳、麦克风心跳日志彻底静默，
+# 监管线程看不出任何异常——表现就是「突然听不见了，必须手动重启」。
+# 有了这个时间戳，「聋了」才成为可观测的事实。
+_MIC_LAST_FRAME_AT = time.time()
+
+
+# 选中的麦克风找不到时，等多久才回落到这台机器现有的麦克风。
+# 蓝牙重连是几秒的事，换机器则永远等不到——用时间把这两种情况分开。
+MIC_PREF_GRACE_SECONDS = float(os.environ.get("VOICE_MIC_PREF_GRACE_SECONDS", "20"))
+_MIC_PREF_MISSING_SINCE = {}
+
+
+def note_mic_frame():
+    """主循环每拿到一帧就打点。"""
+    global _MIC_LAST_FRAME_AT
+    _MIC_LAST_FRAME_AT = time.time()
+
+
+def mic_silent_seconds():
+    """距离上一帧过去了多久。"""
+    return max(0.0, time.time() - _MIC_LAST_FRAME_AT)
+
 _OUTPUT_STREAM = None
 _OUTPUT_SAMPLE_RATE = None
 _OUTPUT_CHANNELS = 1
@@ -285,15 +310,42 @@ def _list_enabled_pc_input_devices():
         candidates.append((i, name))
     if active:
         # 旧版本的设备页会把所有开启的麦都写进来。按保存顺序取第一个能匹配的，
-        # 绝不把多项继续传给采集层。明确选中的设备暂时不可见时返回空，
-        # 不能静默改用列表里另一只麦克风。
+        # 绝不把多项继续传给采集层。
         for wanted in active:
             matched = [(i, n) for i, n in candidates if _label_in_list(n, [wanted])]
             if matched:
                 candidates = matched
                 break
         else:
-            return []
+            # 保存的偏好一台都对不上。这里有两种完全不同的情况，只能靠时间分辨：
+            #   1) 同一台机器上选中的蓝牙麦刚断开——它几秒后就回来，这段时间
+            #      不能擅自改用电脑麦（一改就可能从外放收音、产生回环）。
+            #   2) 换了一台机器——偏好里存的是上一台机器的设备名，永远匹配不上。
+            #      旧代码在这种情况下永远返回空，表现就是新机器上「怎么说都不识别」。
+            # 所以：先按 1) 等一个宽限期，超时还没出现就按 2) 回落到这台机器现有的
+            # 麦克风（_drop_output_device_mic 会优先挑系统默认输入）。
+            # 偏好本身不改写——原设备一插回来，设备签名就变回它，主循环照常切过去。
+            key = "|".join(str(a) for a in active)
+            now = time.time()
+            first_missing = _MIC_PREF_MISSING_SINCE.get(key)
+            if not first_missing:
+                _MIC_PREF_MISSING_SINCE[key] = now
+                return []
+            if now - first_missing < MIC_PREF_GRACE_SECONDS:
+                return []
+            fallback = _drop_output_device_mic(candidates)
+            if not fallback:
+                return []
+            sig = "|".join(n for _, n in fallback)
+            if getattr(_list_enabled_pc_input_devices, "_fallback_sig", None) != sig:
+                _list_enabled_pc_input_devices._fallback_sig = sig
+                log(
+                    "麦克风：偏好设备 %s 等了 %.0fs 仍未出现，先用 %s；它接回来会自动切换"
+                    % (key, MIC_PREF_GRACE_SECONDS, sig)
+                )
+            return fallback
+        _MIC_PREF_MISSING_SINCE.pop("|".join(str(a) for a in active), None)
+        _list_enabled_pc_input_devices._fallback_sig = None
     return _drop_output_device_mic(candidates)
 
 
