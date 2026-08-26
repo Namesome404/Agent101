@@ -1,0 +1,486 @@
+/* EV Surface · 极简纯色外壳
+ * 设计：单一实色面板 + 发丝级分隔线，无渐变、无玻璃拟态；
+ * 动效克制流畅（进场轻微上浮+收放，退场快速淡出）。
+ * 关键：圆角按 data-window-kind 立即生效（在 JS 首帧就设好），
+ * 不再等 data-surface-id 渲染后才加，杜绝「方角一闪」。 */
+
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+
+  --ev-radius: 17px;
+  --ev-bar-h: 46px;
+  --ev-overlay-bar-h: 10px;
+
+  --ev-accent: #6bbf8a;
+  --ev-panel: #17171a;
+  --ev-line: rgba(255, 255, 255, .07);
+  --ev-text: rgba(245, 245, 247, .94);
+  --ev-secondary: rgba(245, 245, 247, .52);
+  --ev-tertiary: rgba(245, 245, 247, .30);
+  --ev-hover: rgba(255, 255, 255, .06);
+
+  color: var(--ev-text);
+  background: transparent;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---------- 进/退场动效 ---------- */
+body {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  transition:
+    opacity 220ms cubic-bezier(.32, .72, 0, 1),
+    transform 300ms cubic-bezier(.32, .72, 0, 1);
+}
+
+body.is-entering {
+  opacity: 0;
+  transform: scale(.985) translateY(8px);
+  transition: none;
+}
+
+body.is-closing {
+  opacity: 0;
+  transform: scale(.99) translateY(4px);
+  transition:
+    opacity 150ms ease-in,
+    transform 180ms ease-in;
+}
+
+/* ---------- 面板容器 ---------- */
+.surface-window {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ev-panel);
+  border-radius: 0;
+}
+
+/* 原生装饰窗口：窗角由系统绘制，内部不再叠圆角 */
+body[data-window-kind="native"] .surface-window {
+  border-radius: 0;
+}
+
+/* 无边框浮层（状态栏）：外壳只裁切 iframe，不绘制自己的底色或描边。 */
+body[data-window-kind="overlay"] .surface-window {
+  background: transparent;
+  border-radius: var(--ev-radius);
+  border: 0;
+  /* clip-path 比 overflow:hidden 更可靠地裁剪合成层（iframe 四角） */
+  clip-path: inset(0 round var(--ev-radius));
+  contain: paint;
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 工作 HUD 是状态窗的伴随视图：没有系统标题栏、按钮或可拖拽空区。 */
+body[data-window-kind="hud"] .surface-window {
+  border: 1px solid rgba(255, 255, 255, .075);
+  border-radius: 18px;
+  background: #191c1e;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, .24);
+  clip-path: inset(0 round 18px);
+}
+
+body[data-window-kind="hud"] .surface-bar { display: none; }
+body[data-window-kind="hud"] .surface-content {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ---------- 顶部栏 ---------- */
+.surface-bar {
+  position: relative;
+  z-index: 2;
+  height: var(--ev-bar-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 18px 0 78px;                /* 左侧留出系统红绿灯 */
+  border-bottom: 1px solid var(--ev-line);
+  user-select: none;
+}
+
+.surface-title {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ev-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -.003em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.surface-status { display: none; }
+.surface-close { display: none; }
+
+/* ---------- 内容区 ---------- */
+.surface-content {
+  position: relative;
+  width: 100%;
+  height: calc(100% - var(--ev-bar-h));
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.surface-content::-webkit-scrollbar { display: none; }
+.has-native-page .surface-content { overflow: hidden; }
+
+.surface-empty,
+.surface-text,
+.surface-blocks,
+.surface-app,
+.native-page-placeholder { min-height: 100%; }
+
+.surface-empty {
+  display: grid;
+  place-items: center;
+  color: var(--ev-tertiary);
+  font-size: 12px;
+  letter-spacing: .04em;
+}
+
+.surface-text {
+  margin: 0;
+  padding: 24px 26px;
+  color: var(--ev-text);
+  font: 400 13px/1.65 ui-monospace, "SFMono-Regular", Menlo, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.surface-blocks { padding: 28px 30px; }
+
+.surface-blocks h1 {
+  margin: 0 0 16px;
+  color: var(--ev-text);
+  font-size: clamp(23px, 4.4vw, 32px);
+  font-weight: 600;
+  letter-spacing: -.026em;
+  line-height: 1.14;
+}
+
+.surface-blocks p,
+.surface-blocks li {
+  color: var(--ev-secondary);
+  font-size: 14px;
+  line-height: 1.62;
+}
+
+.surface-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+/* ---------- 内置应用（计时器 / 记事本） ---------- */
+.surface-app {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 26px 32px 46px;
+  text-align: center;
+}
+
+.timer-value {
+  color: var(--ev-text);
+  font-size: clamp(52px, 11vw, 70px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 300;
+  letter-spacing: -.04em;
+  line-height: 1;
+}
+
+.timer-detail,
+.note-detail {
+  margin-top: 13px;
+  color: var(--ev-secondary);
+  font-size: 12px;
+}
+
+.timer-progress {
+  width: min(220px, 68%);
+  height: 2px;
+  margin: 22px auto 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .08);
+}
+
+.timer-progress > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ev-accent);
+  transition: width 300ms cubic-bezier(.32, .72, 0, 1);
+}
+
+.app-actions {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  left: 18px;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.app-actions button {
+  appearance: none;
+  min-width: 62px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ev-secondary);
+  background: var(--ev-hover);
+  font: 500 11px/1 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.app-actions button:hover {
+  color: var(--ev-text);
+  background: rgba(255, 255, 255, .11);
+}
+
+.app-actions button:active { transform: scale(.96); }
+
+.note-copy {
+  max-width: 500px;
+  margin: 0 auto;
+  color: var(--ev-text);
+  font-size: clamp(21px, 4vw, 27px);
+  font-weight: 400;
+  letter-spacing: -.02em;
+  line-height: 1.45;
+}
+
+/* ---------- 工作 Agent：朴素、仪表感、持续有生命 ---------- */
+.work-agent {
+  --work-accent: #8db8b2;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  padding: 18px 13px 14px;
+  text-align: center;
+}
+
+.work-visual {
+  position: relative;
+  width: 78px;
+  height: 78px;
+  flex: 0 0 auto;
+}
+
+.work-core,
+.work-orbit {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  display: block;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.work-core {
+  width: 8px;
+  height: 8px;
+  background: var(--work-accent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--work-accent) 10%, transparent);
+  animation: work-breathe 1.9s ease-in-out infinite;
+}
+
+.work-orbit {
+  border: 1px solid color-mix(in srgb, var(--work-accent) 34%, transparent);
+}
+
+.orbit-1 {
+  width: 30px;
+  height: 30px;
+  border-right-color: transparent;
+  animation: work-spin 2.4s linear infinite;
+}
+
+.orbit-2 {
+  width: 50px;
+  height: 50px;
+  border-top-color: transparent;
+  border-left-color: color-mix(in srgb, var(--work-accent) 10%, transparent);
+  animation: work-spin-reverse 4.2s linear infinite;
+}
+
+.orbit-3 {
+  width: 70px;
+  height: 70px;
+  border-color: color-mix(in srgb, var(--work-accent) 12%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--work-accent) 42%, transparent);
+  animation: work-spin 7s linear infinite;
+}
+
+.work-phase {
+  max-width: 100%;
+  margin-top: 10px;
+  overflow: hidden;
+  color: rgba(245, 246, 244, .92);
+  font-size: 13px;
+  font-weight: 580;
+  letter-spacing: -.01em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-detail {
+  display: -webkit-box;
+  max-width: 100%;
+  min-height: 34px;
+  margin-top: 7px;
+  overflow: hidden;
+  color: rgba(245, 246, 244, .51);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.work-meta {
+  max-width: 100%;
+  margin-top: auto;
+  overflow: hidden;
+  color: rgba(245, 246, 244, .29);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-agent[data-phase="checking"] { --work-accent: #c1ad7d; }
+.work-agent[data-phase="completed"] { --work-accent: #91b99a; }
+.work-agent[data-phase="failed"] { --work-accent: #bc7d75; }
+.work-agent[data-phase="completed"] .work-orbit,
+.work-agent[data-phase="failed"] .work-orbit { animation-duration: 12s; }
+
+@keyframes work-spin {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@keyframes work-spin-reverse {
+  to { transform: translate(-50%, -50%) rotate(-360deg); }
+}
+
+@keyframes work-breathe {
+  50% { opacity: .55; transform: translate(-50%, -50%) scale(.72); }
+}
+
+.note-cursor {
+  display: inline-block;
+  width: 1.5px;
+  height: .9em;
+  margin-left: 3px;
+  vertical-align: -.02em;
+  background: var(--ev-accent);
+  animation: note-caret 1.2s step-end infinite;
+}
+
+.native-page-placeholder {
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+.native-page-host {
+  color: var(--ev-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.native-page-detail {
+  margin-top: 7px;
+  color: var(--ev-tertiary);
+  font-size: 11px;
+}
+
+/* ---------- 状态栏浮层 ---------- */
+body[data-window-kind="overlay"] .surface-bar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 3;
+  height: var(--ev-overlay-bar-h);
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
+}
+
+/* 顶部只保留透明拖拽热区，不再额外占据 10px 或露出外壳底色。 */
+body[data-window-kind="overlay"] .surface-title {
+  display: none;
+}
+
+body[data-window-kind="overlay"] .surface-content {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 四角由唯一的外壳裁剪层统一处理，避免 iframe 再叠一圈边缘。 */
+body[data-window-kind="overlay"] .surface-frame {
+  border-radius: inherit;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+@keyframes note-caret { 50% { opacity: 0; } }
+
+/* ---------- 浅色 ---------- */
+@media (prefers-color-scheme: light) {
+  :root {
+    --ev-panel: #ffffff;
+    --ev-line: rgba(0, 0, 0, .08);
+    --ev-text: rgba(24, 24, 26, .92);
+    --ev-secondary: rgba(24, 24, 26, .50);
+    --ev-tertiary: rgba(24, 24, 26, .30);
+    --ev-hover: rgba(0, 0, 0, .05);
+  }
+
+  .timer-progress { background: rgba(0, 0, 0, .09); }
+  .app-actions button:hover { background: rgba(0, 0, 0, .09); }
+  body[data-window-kind="hud"] .surface-window {
+    border-color: rgba(26, 30, 31, .09);
+    background: #f3f1ec;
+    box-shadow: 0 16px 40px rgba(28, 32, 33, .12);
+  }
+  .work-phase { color: rgba(26, 30, 31, .9); }
+  .work-detail { color: rgba(26, 30, 31, .53); }
+  .work-meta { color: rgba(26, 30, 31, .31); }
+}
+
+/* ---------- 降低动效 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  body { transition-duration: 1ms; }
+  .note-cursor { animation: none; }
+  .app-actions button:active { transform: none; }
+  .work-core,
+  .work-orbit { animation: none; }
+}

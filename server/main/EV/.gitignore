@@ -1,0 +1,5 @@
+# 桌面场景构建产物（源码在 ui/desk-app/，npm run build:desk 重新生成）
+ui/desk/
+
+# 本地备忘
+API.md

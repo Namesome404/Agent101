@@ -1,0 +1,101 @@
+# IDE / OS
+.idea/
+.vscode/
+.cursor/
+.claude/
+.DS_Store
+Thumbs.db
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.log
+logs/
+
+# Node / frontend
+node_modules/
+.webpack_cache/
+
+# Android
+.gradle/
+local.properties
+**/app/build/
+**/captures/
+.externalNativeBuild/
+.cxx/
+jarvis-assistant-android/app/src/main/assets/gesture_recognizer.task
+
+# Runtime / local data
+tmp/
+data/
+**/tmp/
+**/*.pid
+
+# Secrets / local overrides
+.env
+.env.*
+!.env.example
+.config.yaml
+.secrets.yaml
+.private_config.yaml
+**/data/.config.yaml
+**/data/.wakeup_words.yaml
+
+# TLS / certificates
+*.key
+*.crt
+*.pem
+
+# Large model / runtime assets
+**/models/SenseVoiceSmall/model.pt
+**/models/sherpa-onnx*
+**/asr-models/
+**/wakeword_runtime/models/
+**/wakeword_runtime/sherpa-onnx*
+**/models/wakeword/
+*.tar.bz2
+*.pt
+*.onnx
+*.bin
+*.model
+*.safetensors
+*.gguf
+# 上游模型自带的示例音频（demo 用，非项目资产）
+**/models/**/example/
+
+# 含真实 API Key 的运行配置（模板见上游，密钥应放 data/.config.yaml）
+esp32-server/main/server/config.yaml
+**/server/config.yaml
+
+# 本地 API 备忘（仅本机查阅，不入库）
+**/EV/API.md
+esp32-server/main/EV/API.md
+
+# 本地视觉模型权重
+**/pose_landmarker.task
+**/data/pose_landmarker.task
+
+# SQLite / 本地数据库（设备绑定/密钥/运行数据，各自机器自建）
+*.db
+*.sqlite
+*.sqlite3
+
+# MySQL / uploads
+**/mysql/
+uploadfile/
+music/
+my_wakeup_words.mp3
+
+# 本地数据库备份（含真实密钥，勿提交）
+*.db.bak-*
+*.db.bak_*
+*.db.bak
+*.db.rescue
+
+# Local deliverables and Codex scratch work
+outputs/
+work/

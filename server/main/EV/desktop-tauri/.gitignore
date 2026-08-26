@@ -1,0 +1,13 @@
+node_modules/
+src-tauri/target/
+.cargo-home/
+.rustup-home/
+*.log
+
+# server/.gitignore 里全局 *.json 会吞掉 Tauri 权限文件，这里豁免（capabilities 必须入库）
+!src-tauri/capabilities/
+!src-tauri/capabilities/*.json
+
+# 同理：tauri.conf.json 是构建必需配置（CSP/窗口/标识），不入库等于换机即丢
+!src-tauri/tauri.conf.json
+

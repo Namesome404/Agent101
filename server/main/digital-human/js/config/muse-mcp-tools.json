@@ -1,0 +1,117 @@
+[
+    {
+        "name": "muse.ui.open_panel",
+        "description": "【EV 屏幕浮动面板】在 EV 桌面上打开信息浮窗。用户说「打开窗户/窗口/面板」时必须调用（指屏幕面板，不是智能家居窗户）。panel=weather天气 | news新闻 | search检索 | web网页预览 | devices/models/status/custom。用户说「预览/打开链接/看看这篇/第N条」时用 panel=web 并传 url。weather/news/search 可传 data 结构化内容。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "panel": {
+                    "type": "string",
+                    "enum": ["devices", "models", "status", "weather", "news", "search", "web", "custom"],
+                    "description": "面板类型"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "窗口标题栏文字"
+                },
+                "position": {
+                    "type": "string",
+                    "enum": ["left-top", "right-top", "left-bottom", "right-bottom", "left", "right", "top", "bottom", "center", "auto"],
+                    "description": "位置"
+                },
+                "width": {
+                    "type": "integer",
+                    "minimum": 260,
+                    "maximum": 860,
+                    "description": "宽度（像素）"
+                },
+                "height": {
+                    "type": "integer",
+                    "minimum": 180,
+                    "maximum": 640,
+                    "description": "高度（像素）"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "纯文本正文（无 data 时回退）"
+                },
+                "url": {
+                    "type": "string",
+                    "description": "web 面板要预览的网页地址（http/https）"
+                },
+                "data": {
+                    "type": "object",
+                    "description": "结构化面板数据（weather/news/search）"
+                }
+            },
+            "required": ["panel"]
+        }
+    },
+    {
+        "name": "muse.ui.update_panel",
+        "description": "【调整 EV 屏幕浮窗】移动、改变大小或更新已打开的信息面板。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "window_id": {
+                    "type": "string",
+                    "description": "具体窗口ID"
+                },
+                "panel": {
+                    "type": "string",
+                    "enum": ["devices", "models", "status", "weather", "news", "search", "web", "custom"],
+                    "description": "未指定 window_id 时，操作该类型最近打开的面板"
+                },
+                "position": {
+                    "type": "string",
+                    "enum": ["left-top", "right-top", "left-bottom", "right-bottom", "left", "right", "top", "bottom", "center", "auto"]
+                },
+                "width": { "type": "integer", "minimum": 260, "maximum": 860 },
+                "height": { "type": "integer", "minimum": 180, "maximum": 640 },
+                "bring_to_front": {
+                    "type": "boolean",
+                    "description": "置顶到最前"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "更新面板正文"
+                },
+                "url": {
+                    "type": "string",
+                    "description": "web 面板 URL"
+                },
+                "data": {
+                    "type": "object",
+                    "description": "结构化面板数据"
+                }
+            }
+        }
+    },
+    {
+        "name": "muse.ui.close_panel",
+        "description": "【关闭 EV 屏幕浮窗】关闭一个或全部信息面板。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "window_id": { "type": "string", "description": "关闭指定窗口" },
+                "panel": {
+                    "type": "string",
+                    "enum": ["devices", "models", "status", "weather", "news", "search", "web", "custom"],
+                    "description": "关闭该类型最近的面板"
+                },
+                "close_all": {
+                    "type": "boolean",
+                    "description": "关闭全部面板"
+                }
+            }
+        }
+    },
+    {
+        "name": "muse.ui.list_panels",
+        "description": "【列出已打开的 EV 浮窗】",
+        "inputSchema": {
+            "type": "object",
+            "properties": {}
+        }
+    }
+]

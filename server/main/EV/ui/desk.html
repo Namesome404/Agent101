@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EV Desk</title>
+  <link rel="stylesheet" href="/static/desk.css?v=1" />
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <div id="shell" class="desk-shell booting no-transition">
+    <header class="desk-head">
+      <h1 id="title">EV Desk</h1>
+      <div class="actions">
+        <button type="button" id="btnRefresh">刷新</button>
+        <button type="button" id="btnBrowser">浏览器打开</button>
+      </div>
+    </header>
+    <main class="desk-body" id="body"></main>
+  </div>
+  <script>
+  (function () {
+    const path = location.pathname.replace(/\/+$/, "");
+    const parts = path.split("/");
+    const windowId = parts[parts.length - 1] || "site-preview";
+    const shell = document.getElementById("shell");
+    const body = document.getElementById("body");
+    const titleEl = document.getElementById("title");
+    const textState = {};
+    let win = null;
+    let es = null;
+
+    mermaid.initialize({ startOnLoad: false, theme: "dark" });
+
+    function reveal() {
+      shell.classList.remove("no-transition");
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => shell.classList.remove("booting"));
+      });
+    }
+    setTimeout(reveal, 40);
+
+    function applyCssVars(vars) {
+      if (!vars) return;
+      Object.keys(vars).forEach((k) => document.documentElement.style.setProperty(k, vars[k]));
+      if (vars["--desk-bg"] && vars["--desk-bg"].startsWith("#f")) {
+        document.documentElement.classList.add("theme-light");
+      } else {
+        document.documentElement.classList.remove("theme-light");
+      }
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[c]);
+    }
+
+    function simpleMarkdown(text) {
+      let t = esc(text);
+      t = t.replace(/^### (.*)$/gm, "<strong>$1</strong>");
+      t = t.replace(/^## (.*)$/gm, "<strong>$1</strong>");
+      t = t.replace(/^# (.*)$/gm, "<strong>$1</strong>");
+      t = t.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+      t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
+      return t;
+    }
+
+    function renderTable(blk) {
+      const cols = blk.columns || Object.keys((blk.rows && blk.rows[0]) || {});
+      const rows = blk.rows || [];
+      let html = "<table class='desk-table'><thead><tr>";
+      cols.forEach((c) => { html += "<th>" + esc(c) + "</th>"; });
+      if (blk.row_actions && blk.row_actions.length) html += "<th></th>";
+      html += "</tr></thead><tbody>";
+      rows.forEach((row, idx) => {
+        html += "<tr data-idx='" + idx + "'>";
+        cols.forEach((c) => { html += "<td>" + esc(row[c]) + "</td>"; });
+        if (blk.row_actions && blk.row_actions.length) {
+          html += "<td>";
+          blk.row_actions.forEach((ra) => {
+            html += "<label class='desk-toggle'><input type='checkbox' data-action='" +
+              esc(ra.action) + "' data-path='" + esc(row.path || row.name || "") + "' /> " +
+              esc(ra.label || ra.action) + "</label> ";
+          });
+          html += "</td>";
+        }
+        html += "</tr>";
+      });
+      html += "</tbody></table>";
+      return html;
+    }
+
+    function renderBlock(blk) {
+      const type = blk.type;
+      if (type === "status") {
+        return "<div class='desk-status'>" + esc(blk.text || "") + "</div>";
+      }
+      if (type === "table") return renderTable(blk);
+      if (type === "kv") {
+        const entries = blk.entries || [];
+        return "<div class='desk-kv'>" + entries.map((e) =>
+          "<div class='row'><div class='k'>" + esc(e.k || e.key) + "</div><div>" + esc(e.v || e.value) + "</div></div>"
+        ).join("") + "</div>";
+      }
+      if (type === "list") {
+        const items = blk.items || [];
+        return "<ul>" + items.map((it) => "<li>" + esc(typeof it === "string" ? it : (it.title || it.text || JSON.stringify(it))) + "</li>").join("") + "</ul>";
+      }
+      if (type === "markdown") {
+        const id = blk.id || ("md-" + Math.random().toString(36).slice(2, 7));
+        const text = textState[id] != null ? textState[id] : (blk.text || "");
+        const streaming = !!blk._streaming;
+        return "<div class='desk-md" + (streaming ? " desk-cursor" : "") + "' data-block='" + esc(id) + "'>" +
+          simpleMarkdown(text) + "</div>";
+      }
+      if (type === "log") {
+        const id = blk.id || "log";
+        const text = textState[id] != null ? textState[id] : (blk.text || "");
+        return "<pre class='desk-log' data-block='" + esc(id) + "'>" + esc(text) + "</pre>";
+      }
+      if (type === "iframe") {
+        const src = blk.src || (win && win.preview_url) || "";
+        const locked = win && win.preview_locked;
+        const token = blk._reload || "";
+        const url = src + (src.includes("?") ? "&" : "?") + "v=" + (token || Date.now());
+        return "<div class='desk-preview-wrap" + (locked ? " locked" : "") + "'>" +
+          "<iframe src='" + esc(url) + "' title='preview'></iframe>" +
+          "<div class='desk-lock'>正在改…</div></div>";
+      }
+      if (type === "mermaid") {
+        const id = "mmd-" + Math.random().toString(36).slice(2, 8);
+        return "<div class='desk-mermaid' id='" + id + "' data-mermaid='1'><pre class='mermaid'>" +
+          esc(blk.mermaid || blk.text || "") + "</pre></div>";
+      }
+      if (type === "button") {
+        return "<button class='desk-btn' data-action='" + esc(blk.action || "") + "'>" + esc(blk.label || blk.action || "按钮") + "</button>";
+      }
+      if (type === "toggle") {
+        return "<label class='desk-toggle'><input type='checkbox' data-action='" + esc(blk.action || "") + "' /> " + esc(blk.label || "") + "</label>";
+      }
+      return "";
+    }
+
+    function render(w) {
+      win = w;
+      if (!w) return;
+      titleEl.textContent = w.title || "EV Desk";
+      document.title = w.title || "EV Desk";
+      applyCssVars(w.css_vars);
+      // append logs into log blocks text
+      const logs = w.logs || [];
+      if (logs.length) {
+        const logText = logs.map((e) => e.text).join("\n");
+        textState["term"] = textState["term"] || logText;
+        textState["activity"] = textState["activity"] || logText;
+        textState["job-log"] = logText;
+      }
+      let html = "";
+      (w.sections || []).forEach((sec) => {
+        html += "<section class='desk-section'>";
+        if (sec.title) html += "<h2>" + esc(sec.title) + "</h2>";
+        (sec.blocks || []).forEach((blk) => { html += renderBlock(blk); });
+        html += "</section>";
+      });
+      // preserve scroll
+      const prevTop = body.scrollTop;
+      body.innerHTML = html || "<p class='desk-md'>空窗口</p>";
+      body.scrollTop = prevTop;
+      // mermaid
+      document.querySelectorAll(".mermaid").forEach(async (el) => {
+        try {
+          const { svg } = await mermaid.render("g" + Math.random().toString(36).slice(2), el.textContent);
+          el.outerHTML = svg;
+        } catch (e) {}
+      });
+      wireActions();
+    }
+
+    function wireActions() {
+      body.querySelectorAll("[data-action]").forEach((el) => {
+        const fire = () => {
+          const action = el.getAttribute("data-action");
+          if (!action) return;
+          const payload = {
+            window_id: windowId,
+            path: el.getAttribute("data-path") || "",
+            url: (win && win.preview_url) || "",
+          };
+          fetch("/api/desk/action", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, payload }),
+          }).catch(() => {});
+        };
+        if (el.tagName === "BUTTON") el.onclick = fire;
+        else el.onchange = fire;
+      });
+    }
+
+    document.getElementById("btnRefresh").onclick = () => {
+      fetch("/api/desk/windows/" + encodeURIComponent(windowId))
+        .then((r) => r.json())
+        .then((d) => d.window && render(d.window));
+    };
+    document.getElementById("btnBrowser").onclick = () => {
+      fetch("/api/desk/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "open_in_browser",
+          payload: { window_id: windowId, url: (win && win.preview_url) || "" },
+        }),
+      });
+    };
+
+    function onEvent(ev) {
+      if (!ev || !ev.type) return;
+      if (ev.type === "schema" || ev.type === "state") {
+        if (ev.window) render(ev.window);
+        return;
+      }
+      if (ev.type === "style" && ev.css_vars) {
+        applyCssVars(ev.css_vars);
+        return;
+      }
+      if (ev.type === "text_delta") {
+        textState[ev.block_id] = ev.text || ((textState[ev.block_id] || "") + (ev.delta || ""));
+        const node = body.querySelector("[data-block='" + ev.block_id + "']");
+        if (node) {
+          if (node.classList.contains("desk-log")) node.textContent = textState[ev.block_id];
+          else {
+            node.classList.add("desk-cursor");
+            node.innerHTML = simpleMarkdown(textState[ev.block_id]);
+          }
+          // rough Pretext-like height reserve: grow min-height by lines
+          const lines = Math.max(1, String(textState[ev.block_id]).split("\n").length);
+          node.style.minHeight = (lines * 1.55) + "em";
+        } else if (win) {
+          render(win);
+        }
+        return;
+      }
+      if (ev.type === "text_done") {
+        textState[ev.block_id] = ev.text || textState[ev.block_id] || "";
+        const node = body.querySelector("[data-block='" + ev.block_id + "']");
+        if (node) node.classList.remove("desk-cursor");
+        return;
+      }
+      if (ev.type === "log_event") {
+        const line = (ev.entry && ev.entry.text) || "";
+        ["term", "activity", "job-log"].forEach((id) => {
+          textState[id] = (textState[id] ? textState[id] + "\n" : "") + line;
+          const node = body.querySelector("[data-block='" + id + "']");
+          if (node) {
+            node.textContent = textState[id];
+            node.scrollTop = node.scrollHeight;
+          }
+        });
+        return;
+      }
+      if (ev.type === "preview") {
+        if (win) {
+          win.preview_url = ev.preview_url || win.preview_url;
+          win.preview_locked = !!ev.preview_locked;
+          (win.sections || []).forEach((sec) => {
+            (sec.blocks || []).forEach((blk) => {
+              if (blk.type === "iframe") {
+                if (ev.preview_url) blk.src = ev.preview_url;
+                blk._reload = ev.reload_token || Date.now();
+              }
+            });
+          });
+          render(win);
+        }
+        return;
+      }
+      if (ev.type === "closed") {
+        shell.classList.add("closing");
+      }
+    }
+
+    fetch("/api/desk/windows/" + encodeURIComponent(windowId))
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.window) render(d.window);
+        else {
+          body.innerHTML = "<p class='desk-md'>窗口尚未创建。可用语音让 EV 打开。</p>";
+        }
+      })
+      .catch(() => {
+        body.innerHTML = "<p class='desk-md'>无法加载窗口状态</p>";
+      });
+
+    es = new EventSource("/api/desk/" + encodeURIComponent(windowId) + "/events");
+    es.onmessage = (msg) => {
+      try { onEvent(JSON.parse(msg.data)); } catch (e) {}
+    };
+  })();
+  </script>
+</body>
+</html>

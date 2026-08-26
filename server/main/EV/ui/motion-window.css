@@ -1,0 +1,10 @@
+/* Shared with Muse terminal floating windows — clip-path reveal */
+.ev-win-motion {
+  transition: left .4s cubic-bezier(.22,1,.36,1), top .4s cubic-bezier(.22,1,.36,1),
+    width .32s ease, height .32s ease, clip-path .52s cubic-bezier(.16,.84,.24,1);
+  clip-path: inset(0 round 6px);
+}
+.ev-win-motion.booting,
+.ev-win-motion.closing { clip-path: inset(50% 0 50% 0 round 6px); }
+.ev-win-motion.no-transition,
+.ev-win-motion.dragging { transition: none !important; }

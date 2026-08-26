@@ -1,0 +1,17 @@
+{
+  "name": "ev-tauri-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tauri Scene desktop shell for EV",
+  "scripts": {
+    "tauri": "./scripts/rust-env.sh tauri",
+    "dev": "./scripts/rust-env.sh tauri dev",
+    "build": "./scripts/rust-env.sh tauri build --no-bundle",
+    "check:rust": "./scripts/rust-env.sh cargo check --manifest-path src-tauri/Cargo.toml",
+    "check:js": "node --check ui/surface.js",
+    "check": "npm run check:js && npm run check:rust"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  }
+}

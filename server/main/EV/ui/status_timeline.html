@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>EV</title>
+<style>
+:root {
+  color-scheme:dark;
+  --radius:17px;
+  --workspace:#17191b; --surface:#1d1f21; --surface-2:#242729; --surface-3:#2b2e30;
+  --line:rgba(241,239,233,.095); --line-strong:rgba(241,239,233,.15);
+  --text:#f0eee9; --secondary:#aaa9a4; --tertiary:#797b7b;
+  --accent:#c37a6d; --accent-soft:rgba(195,122,109,.12);
+  --danger:#c47c72; --shadow:0 18px 46px rgba(0,0,0,.27);
+}
+:root[data-theme="light"] {
+  color-scheme:light;
+  --workspace:#e3e1dc; --surface:#f3f1ec; --surface-2:#e9e7e2; --surface-3:#dedcd7;
+  --line:rgba(28,31,33,.105); --line-strong:rgba(28,31,33,.17);
+  --text:#1d2123; --secondary:#676a6b; --tertiary:#8a8b89;
+  --accent:#9f5045; --accent-soft:rgba(159,80,69,.09);
+  --danger:#9f5045; --shadow:0 18px 44px rgba(55,50,44,.14);
+}
+* { box-sizing:border-box; min-width:0 }
+html,body { width:100%; height:100%; margin:0; overflow:hidden; user-select:none; -webkit-user-select:none }
+body {
+  padding:0; color:var(--text); background:transparent;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+}
+button { font:inherit; -webkit-tap-highlight-color:transparent }
+.agent-surface {
+  position:relative; width:min(100%,380px); height:min(100%,132px); overflow:hidden;
+  border:0; border-radius:var(--radius); clip-path:inset(0 round var(--radius));
+  background:var(--surface); box-shadow:none;
+  contain:paint; isolation:isolate; -webkit-user-select:none; user-select:none;
+  transition:background 220ms ease;
+}
+.agent-surface:after {
+  content:none;
+}
+body[data-panel="open"] .agent-surface { width:min(100%,380px); height:min(100%,320px) }
+.statusbar {
+  height:132px; padding:12px 16px 14px; display:flex; flex-direction:column;
+  user-select:none;
+}
+.status-top { flex:0 0 23px; display:flex; align-items:center; justify-content:space-between; gap:10px }
+.phase {
+  display:flex; align-items:center; gap:8px; margin:0; overflow:hidden; color:var(--secondary);
+  font-size:10px; font-weight:500; letter-spacing:.05em; line-height:1.2; text-overflow:ellipsis; white-space:nowrap;
+}
+.phase:before {
+  content:""; flex:0 0 auto; width:5px; height:5px; border-radius:50%; background:var(--accent);
+  box-shadow:0 0 0 0 var(--accent-soft); animation:state-breathe 1.8s ease-out infinite;
+}
+body[data-agent-state="paused"] .phase:before,body[data-agent-state="stopped"] .phase:before,body[data-agent-state="offline"] .phase:before { animation:none; opacity:.5 }
+.controls { flex:0 0 auto; display:flex; align-items:center; justify-content:flex-end; gap:2px }
+.control,.insight-button,.focus-button {
+  appearance:none; display:inline-flex; align-items:center; justify-content:center; padding:0 7px;
+  border:1px solid transparent; border-radius:8px; color:var(--tertiary); background:transparent;
+  cursor:pointer; transition:background 140ms ease,color 140ms ease,opacity 140ms ease,transform 140ms ease;
+}
+.control { height:25px; font-size:10px }
+.icon-control { width:25px; padding:0 }
+.control:hover,.insight-button:hover,.focus-button:hover { color:var(--text); background:var(--surface-2); border-color:var(--line) }
+.control:active,.insight-button:active,.focus-button:active { transform:scale(.95) }
+.control:focus-visible,.insight-button:focus-visible,.focus-button:focus-visible,.media-image:focus-visible,.source-row:focus-visible { outline:2px solid var(--accent); outline-offset:1px }
+.control:disabled { opacity:.28; cursor:default }
+.control svg,.insight-button svg,.focus-button svg { width:14px; height:14px }
+.primary-control { color:var(--secondary) }
+.primary-control:hover { color:var(--text) }
+.status-copy { flex:1; display:flex; align-items:center; overflow:hidden; transition:transform 520ms cubic-bezier(.22,1,.36,1),opacity 320ms ease }
+.transcript {
+  width:100%; max-height:2.64em; margin:4px 0 0; overflow:hidden; color:var(--text);
+  font-size:clamp(19px,5.8vw,22px); font-weight:400; letter-spacing:-.035em; line-height:1.32;
+  overflow-wrap:anywhere; word-break:break-word; white-space:normal;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+}
+.transcript-char { display:inline; will-change:transform,filter,opacity }
+.transcript-char.is-new { display:inline-block; animation:transcript-arrive 340ms cubic-bezier(.2,.8,.2,1) both }
+.transcript.is-revised { animation:transcript-revise 360ms cubic-bezier(.2,.8,.2,1) }
+.transcript-caret {
+  display:none; width:1px; height:.95em; margin-left:3px; transform:translateY(.11em);
+  vertical-align:baseline; background:var(--accent); animation:caret-blink 900ms steps(1,end) infinite;
+}
+body[data-agent-state="hearing"] .transcript-caret { display:inline-block }
+
+.insight {
+  position:relative; display:none; height:calc(100% - 132px); min-height:0;
+  border-top:1px solid var(--line);
+}
+body[data-panel="open"] .insight { display:block; animation:insight-unfold 420ms cubic-bezier(.22,1,.36,1) both }
+.collapse-handle {
+  appearance:none; position:absolute; top:-8px; left:50%; z-index:4; width:30px; height:16px;
+  display:grid; place-items:center; padding:0; border:0; border-radius:9px; color:var(--tertiary);
+  background:var(--surface); cursor:pointer; transform:translateX(-50%);
+  transition:color 140ms ease,background 140ms ease;
+}
+.collapse-handle:hover { color:var(--text); background:var(--surface-2) }
+.collapse-handle svg { width:12px; height:12px }
+.focus-button { width:28px; height:28px; padding:0; border-radius:8px }
+.canvas-scroll { width:100%; height:100%; min-height:0; overflow:auto; scrollbar-color:var(--line-strong) transparent; scrollbar-width:thin }
+.canvas { width:100%; display:block; padding:11px 14px 9px; user-select:none; -webkit-user-select:none }
+/* 排版来自服务端组装的 layout 树：容器自带方向/列数/间距/权重。
+   以前这里写死两栏网格，服务端按意图算出的呈现规格根本落不了地。 */
+.canvas-group { min-width:0 }
+.canvas-group[data-axis="column"] { display:flex; flex-direction:column }
+.canvas-group[data-axis="row"] { display:flex; flex-direction:row; align-items:flex-start }
+.canvas-group[data-axis="grid"] { display:grid; grid-template-columns:repeat(var(--cols,2),minmax(0,1fr)); align-items:start }
+.canvas-group[data-axis="row"]>* { min-width:0 }
+.canvas .summary-card,.canvas .media-block,.canvas .result-list,.canvas .text-card { animation:content-rise 620ms cubic-bezier(.22,1,.36,1) both }
+.canvas .media-block { animation-delay:90ms }.canvas .result-list { animation-delay:160ms }
+.text-card { margin:0; color:var(--secondary); font-size:11.5px; line-height:1.55; overflow-wrap:anywhere }
+.text-card-title { margin:0 0 4px; color:var(--text); font-size:12px; font-weight:560; letter-spacing:-.01em }
+.canvas.is-pending .summary-card { min-height:48px; animation:none }
+.canvas.is-pending .summary-title:after {
+  content:""; display:inline-block; width:22px; height:2px; margin-left:8px; vertical-align:middle;
+  border-radius:2px; background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  animation:search-breathe 1.15s ease-in-out infinite;
+}
+.summary-card { align-self:start }
+.summary-label { margin:0 0 6px; color:var(--accent); font-size:8.5px; font-weight:500; letter-spacing:.12em }
+.summary-title {
+  margin:0 0 7px; overflow:hidden; color:var(--text); font-size:18px; font-weight:400;
+  line-height:1.18; letter-spacing:-.035em; overflow-wrap:anywhere; word-break:break-word;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+}
+.summary-text {
+  margin:0; overflow:hidden; color:var(--secondary); font-size:12px; font-weight:400; letter-spacing:-.006em;
+  line-height:1.55; white-space:normal; overflow-wrap:anywhere; word-break:break-word;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:4; cursor:zoom-in;
+}
+/* 结论仍按紧凑布局收敛四行，但点一下可看全文——此前只能硬切，长结论断在半句上 */
+.summary-text.is-open { -webkit-line-clamp:unset; cursor:zoom-out }
+
+/* 项目清单：面板主体是可读的编号条目，而不是口头回答的副本 */
+.result-list { margin:0; padding:0; border-top:1px solid var(--line) }
+.result-row {
+  position:relative; display:block; padding:11px 0 11px 26px; color:inherit; text-decoration:none;
+  border-top:1px solid var(--line); transition:background 160ms ease;
+}
+.result-row:first-child { border-top:0 }
+.result-row:hover { background:rgba(255,255,255,.035) }
+.result-index {
+  position:absolute; left:0; top:12px; color:var(--tertiary);
+  font:500 9.5px/1 ui-monospace,"SF Mono",Menlo,monospace; letter-spacing:.04em;
+}
+.result-row:hover .result-index { color:var(--accent) }
+.result-name {
+  color:var(--text); font-size:12.5px; font-weight:560; line-height:1.4; letter-spacing:-.012em;
+  overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+}
+.result-desc {
+  margin-top:4px; color:var(--tertiary); font-size:11px; line-height:1.5;
+  overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+}
+.result-link { margin-top:5px; color:var(--accent); font:500 9.5px/1 ui-monospace,"SF Mono",Menlo,monospace; opacity:.66 }
+.media-block { position:relative; min-width:0; align-self:start }
+.media-image {
+  appearance:none; position:relative; width:100%; height:auto; min-height:0; aspect-ratio:16/10; display:block; padding:0; overflow:hidden;
+  border:0; border-radius:2px 10px 2px 10px; background:var(--surface-2); cursor:zoom-in;
+  animation:image-reveal 760ms 120ms cubic-bezier(.22,1,.36,1) both;
+}
+.media-image img { width:100%; height:100%; min-height:0; max-height:none; display:block; object-fit:cover; -webkit-user-drag:none }
+.media-caption {
+  position:absolute; left:8px; right:8px; bottom:8px; padding:5px 7px; overflow:hidden;
+  color:#f1efe9; background:rgba(26,27,28,.72); border-radius:5px;
+  font-size:9px; line-height:1.2; text-overflow:ellipsis; white-space:nowrap;
+}
+.media-count {
+  position:absolute; top:7px; right:7px; z-index:2; padding:4px 6px; color:#f1efe9;
+  background:rgba(26,27,28,.72); border-radius:5px; font:500 9px/1 ui-monospace,SFMono-Regular,monospace;
+}
+.source-collection { grid-column:1/-1; margin:0; border-top:1px solid var(--line) }
+.source-collection>summary {
+  display:flex; align-items:center; min-height:28px; color:var(--tertiary); cursor:pointer;
+  font-size:10.5px; font-weight:400; list-style:none; user-select:none;
+}
+.source-collection>summary::-webkit-details-marker { display:none }
+.source-collection>summary:after { content:"＋"; flex:0 0 auto; margin-left:auto; color:var(--tertiary); font:13px ui-monospace,monospace }
+.source-collection[open]>summary:after { content:"－" }
+.source-list { padding-bottom:3px }
+.source-row { display:block; padding:9px 0; overflow:hidden; color:inherit; text-decoration:none; border-top:1px solid var(--line) }
+.source-title { overflow:hidden; color:var(--secondary); font-size:11px; font-weight:400; text-overflow:ellipsis; white-space:nowrap }
+.source-meta { margin-top:3px; overflow:hidden; color:var(--tertiary); font:9px ui-monospace,SFMono-Regular,monospace; text-overflow:ellipsis; white-space:nowrap }
+.table-node,.chart-node,.model-node,.html-node { margin:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface-2) }
+.table-title { padding:9px 11px; overflow-wrap:anywhere; color:var(--secondary); font-size:10.5px; font-weight:500; border-bottom:1px solid var(--line) }
+.table-scroll { width:100%; overflow:auto }
+table { width:100%; border-collapse:collapse; font-size:10px }
+th,td { min-width:92px; max-width:260px; padding:8px 9px; overflow-wrap:anywhere; word-break:break-word; text-align:left; vertical-align:top; border-bottom:1px solid var(--line) }
+th { color:var(--tertiary); background:var(--surface-3); font-weight:500 }
+td { color:var(--secondary); line-height:1.4 }
+tbody tr:last-child td { border-bottom:0 }
+.chart-node { min-height:182px; padding:12px }
+.chart-node canvas { width:100%; height:156px; display:block }
+.model-node { position:relative; min-height:220px }
+.model-node model-viewer { width:100%; height:220px; display:block }
+.model-fallback { position:absolute; inset:0; display:grid; place-items:center; padding:16px; overflow-wrap:anywhere; color:var(--tertiary); font-size:11px; text-align:center; text-decoration:none }
+.model-caption { position:absolute; left:9px; right:9px; bottom:9px; padding:7px 8px; overflow:hidden; color:#f1efe9; background:rgba(26,27,28,.72); border-radius:6px; font-size:9.5px; text-overflow:ellipsis; white-space:nowrap }
+.html-node iframe { width:100%; height:210px; display:block; border:0; background:transparent }
+.empty-canvas { grid-column:1/-1; min-height:220px; display:grid; place-items:center; padding:20px; overflow-wrap:anywhere; color:var(--tertiary); font-size:11px; text-align:center }
+
+.focus-layer { position:absolute; inset:0; z-index:20; display:none; flex-direction:column; background:var(--surface) }
+.focus-layer.is-open { display:flex }
+.focus-toolbar { flex:0 0 48px; display:flex; align-items:center; gap:3px; padding:0 9px 0 12px; border-bottom:1px solid var(--line) }
+.focus-title { flex:1; min-width:0; overflow:hidden; color:var(--secondary); font-size:10.5px; text-overflow:ellipsis; white-space:nowrap }
+.focus-zoom { flex:0 0 auto; min-width:38px; color:var(--tertiary); font:9px ui-monospace,SFMono-Regular,monospace; text-align:center }
+.focus-stage { position:relative; flex:1; min-height:0; overflow:auto; display:grid; place-items:center; padding:16px }
+.focus-stage img { display:block; max-width:calc(100vw - 48px); max-height:calc(100vh - 82px); object-fit:var(--focus-fit,contain); transform:scale(var(--focus-zoom,1)); transform-origin:center; transition:transform 120ms ease; -webkit-user-drag:none }
+.focus-stage .model-node { width:100%; height:100%; min-height:360px; margin:0 }
+.focus-stage .model-node model-viewer { height:100%; min-height:360px }
+.focus-nav { position:absolute; top:50%; width:32px; height:48px; border:1px solid var(--line); border-radius:8px; color:var(--secondary); background:var(--surface-2); cursor:pointer; transform:translateY(-50%) }
+.focus-prev { left:8px }.focus-next { right:8px }
+@keyframes state-breathe { 0%{box-shadow:0 0 0 0 var(--accent-soft)} 55%,100%{box-shadow:0 0 0 7px transparent} }
+@keyframes caret-blink { 0%,46%{opacity:1} 47%,100%{opacity:.1} }
+@keyframes transcript-arrive { 0%{opacity:0;transform:translateY(12px) scale(.96);filter:blur(6px)} 72%{opacity:1;transform:translateY(-1px) scale(1);filter:blur(0)} 100%{opacity:1;transform:none;filter:blur(0)} }
+@keyframes transcript-revise { 0%{opacity:.25;transform:translateY(5px);filter:blur(4px)} 100%{opacity:1;transform:none;filter:blur(0)} }
+@keyframes insight-unfold { 0%{opacity:0;transform:translateY(-14px);filter:blur(5px)} 100%{opacity:1;transform:none;filter:blur(0)} }
+@keyframes content-rise { 0%{opacity:0;transform:translateY(16px);filter:blur(5px)} 100%{opacity:1;transform:none;filter:blur(0)} }
+@keyframes search-breathe { 0%,100%{opacity:.18;transform:scaleX(.45)} 50%{opacity:.92;transform:scaleX(1)} }
+@keyframes image-reveal { 0%{clip-path:inset(0 100% 0 0);transform:scale(1.025)} 100%{clip-path:inset(0);transform:scale(1)} }
+@media(max-width:470px) {
+  .statusbar { padding:12px 16px 14px }
+  .transcript { font-size:20px }
+  .canvas { gap:8px 12px; padding:10px 13px 8px }
+  .summary-title { font-size:18px }
+}
+@media(max-width:340px) {
+  .statusbar { padding-inline:14px }
+  .controls { gap:0 }
+  .control { padding-inline:5px }
+  .icon-control { width:25px }
+  .transcript { font-size:19px }
+}
+@media(prefers-reduced-motion:reduce) { *,*:before,*:after { animation-duration:.001ms!important; transition-duration:.001ms!important } }
+</style>
+</head>
+<body data-agent-state="starting" data-panel="closed" data-has-content="false">
+<main class="agent-surface" id="agent-surface">
+  <header class="statusbar" aria-label="Agent 状态与控制">
+    <div class="status-top">
+      <p class="phase" id="phase-label">连接中</p>
+      <nav class="controls" aria-label="Agent 控制">
+        <button class="control primary-control" id="primary-control" type="button" aria-label="暂停 Agent" title="暂停 Agent"><span id="primary-label">暂停</span></button>
+      </nav>
+    </div>
+    <section class="status-copy" aria-live="polite">
+      <p class="transcript"><span id="transcript-value">随时说话</span><span class="transcript-caret" aria-hidden="true"></span></p>
+    </section>
+  </header>
+  <section class="insight" id="insight" aria-label="信息摘要">
+    <button class="collapse-handle" id="collapse-control" type="button" aria-label="收起信息摘要" title="收起">
+      <svg viewBox="0 0 16 16" fill="none"><path d="m4.5 6.5 3.5 3 3.5-3" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/></svg>
+    </button>
+    <div class="canvas-scroll" id="canvas-scroll"><div class="canvas" id="canvas-root"></div></div>
+  </section>
+  <section class="focus-layer" id="focus-layer" role="dialog" aria-modal="true" aria-label="内容聚焦预览">
+    <header class="focus-toolbar">
+      <div class="focus-title" id="focus-title"></div>
+      <button class="focus-button" id="zoom-out" type="button" aria-label="缩小">−</button>
+      <span class="focus-zoom" id="focus-zoom">100%</span>
+      <button class="focus-button" id="zoom-in" type="button" aria-label="放大">＋</button>
+      <button class="focus-button" id="fit-control" type="button" aria-label="切换适应方式">
+        <svg viewBox="0 0 16 16" fill="none"><path d="M3 5V3h2M11 3h2v2M13 11v2h-2M5 13H3v-2M5.3 8h5.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </button>
+      <button class="focus-button" id="focus-fullscreen" type="button" aria-label="切换全屏">
+        <svg viewBox="0 0 16 16" fill="none"><path d="M2.75 6V2.75H6M10 2.75h3.25V6M13.25 10v3.25H10M6 13.25H2.75V10" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>
+      </button>
+      <button class="focus-button" id="focus-close" type="button" aria-label="关闭预览">×</button>
+    </header>
+    <div class="focus-stage" id="focus-stage"></div>
+  </section>
+</main>
+<script>
+(() => {
+  const AGENT_ID=1,LIVE_INTERVAL_MS=240,CONTROL_INTERVAL_MS=1200
+  const elements={phase:document.getElementById('phase-label'),transcript:document.getElementById('transcript-value'),primary:document.getElementById('primary-control'),primaryLabel:document.getElementById('primary-label')}
+  const ui={canvas:document.getElementById('canvas-root'),scroll:document.getElementById('canvas-scroll'),collapse:document.getElementById('collapse-control'),focus:document.getElementById('focus-layer'),focusStage:document.getElementById('focus-stage'),focusTitle:document.getElementById('focus-title'),focusZoom:document.getElementById('focus-zoom'),focusClose:document.getElementById('focus-close'),focusFullscreen:document.getElementById('focus-fullscreen'),zoomIn:document.getElementById('zoom-in'),zoomOut:document.getElementById('zoom-out'),fit:document.getElementById('fit-control')}
+  const state={liveSeq:0,streamId:'',live:null,control:null,transcript:'',renderedTranscript:'',transcriptLive:false,transcriptSeq:0,turnId:'',eventPhase:'',eventUntil:0,nextControlAt:0,polling:false,controlBusy:false,phase:'starting'}
+  const canvasState={rev:-1,expanded:false,activeTabId:'',document:null,loading:false,applying:false}
+  let measureFrame=0,lastMeasuredHeight=0
+  const phaseLabels={offline:'离线',stopped:'已停止',paused:'已暂停',starting:'连接中',ready:'随时说话',hearing:'正在听',thinking:'思考中',acting:'查询中',speaking:'正在说',error:'正在重试'}
+
+  const systemLight=matchMedia('(prefers-color-scheme:light)')
+  const themeKeys=['workspace','surface','surface_2','surface_3','line','line_strong','text','secondary','tertiary','accent','accent_soft','danger']
+  let statusTheme={mode:'auto'}
+  function applyStatusTheme(config){statusTheme=config&&typeof config==='object'?config:{mode:'auto'};const requested=['dark','light'].includes(statusTheme.mode)?statusTheme.mode:'auto',resolved=requested==='auto'?(systemLight.matches?'light':'dark'):requested;document.documentElement.dataset.theme=resolved;const palette={...(statusTheme[resolved]&&typeof statusTheme[resolved]==='object'?statusTheme[resolved]:{})};themeKeys.forEach(key=>{if(statusTheme[key])palette[key]=statusTheme[key]});themeKeys.forEach(key=>{const property='--'+key.replaceAll('_','-'),value=String(palette[key]||'').trim();document.documentElement.style.removeProperty(property);if(value&&(CSS.supports('color',value)||CSS.supports('background',value)))document.documentElement.style.setProperty(property,value)})}
+  applyStatusTheme(statusTheme);systemLight.addEventListener?.('change',()=>applyStatusTheme(statusTheme))
+  function compactTranscript(text){const clean=String(text||'').replace(/\s+/g,' ').trim();const chars=Array.from(clean);return chars.length>96?'…'+chars.slice(-95).join(''):clean}
+  function renderTranscriptText(text){const value=compactTranscript(text)||'随时说话';if(value===state.renderedTranscript)return;const previous=state.renderedTranscript;state.renderedTranscript=value;const canAppend=Boolean(previous&&value.startsWith(previous)&&elements.transcript.childElementCount===Array.from(previous).length);if(canAppend){Array.from(value.slice(previous.length)).forEach(character=>{const span=document.createElement('span');span.className='transcript-char is-new';span.textContent=character;elements.transcript.appendChild(span)});return}elements.transcript.replaceChildren();Array.from(value).forEach(character=>{const span=document.createElement('span');span.className='transcript-char'+(state.transcriptLive?' is-new':'');span.textContent=character;elements.transcript.appendChild(span)});const line=elements.transcript.parentElement;line.classList.remove('is-revised');void line.offsetWidth;line.classList.add('is-revised')}
+  function setPrimaryMode(label,action,title){elements.primaryLabel.textContent=label;elements.primary.dataset.action=action;elements.primary.title=title;elements.primary.setAttribute('aria-label',title)}
+  function updateTranscript(text,isLive,turnId){const value=String(text||'').trim();if(!value)return;state.transcript=value;state.transcriptLive=Boolean(isLive);if(turnId)state.turnId=String(turnId)}
+  function rememberPhase(phase,durationMs){state.eventPhase=phase;state.eventUntil=Date.now()+durationMs}
+  function consumeEvent(event){if(!event||typeof event!=='object')return;if(event.type==='utterance'){if(event.role==='user'){updateTranscript(event.text,event.final===false,event.turn_id);state.transcriptSeq=Math.max(state.transcriptSeq,Number(event.seq)||0);rememberPhase(event.final===false?'hearing':'thinking',event.final===false?900:3200)}else if(event.role==='assistant'&&event.final!==false)rememberPhase('speaking',1400);return}if(event.type!=='status')return;const map={listening:['hearing',1200],heard:['thinking',3200],thinking:['thinking',8000],tool:['acting',12000],tool_done:['thinking',3000],speaking:['speaking',5000],done:['ready',800],error:['error',5000]};const target=map[String(event.status||'')];if(target)rememberPhase(target[0],target[1])}
+  function derivePhase(){const control=state.control||{},live=state.live||{};if(control.mode==='stopped')return'stopped';if(control.mode==='paused')return'paused';if(control.mode==='starting')return'starting';if(control.mode==='offline')return'offline';if(live.speaking)return'speaking';if(state.transcriptLive)return'hearing';if(state.eventPhase&&Date.now()<=state.eventUntil)return state.eventPhase;if(live.local_voice&&live.local_voice.running)return'ready';if(control.mode==='running')return'starting';return'offline'}
+  function renderStatus(){const phase=derivePhase();state.phase=phase;document.body.dataset.agentState=phase;elements.phase.textContent=phaseLabels[phase]||phaseLabels.ready;const control=state.control||{},stopped=control.mode==='stopped'||control.mode==='offline',paused=control.mode==='paused',starting=control.mode==='starting';const transcript=state.transcript||(paused?'已暂停，点击继续':stopped?'已停止，点击启动':'随时说话');renderTranscriptText(transcript);if(stopped)setPrimaryMode('启动','start','启动 Agent');else if(paused)setPrimaryMode('继续','resume','继续运行');else setPrimaryMode(starting?'启动中':'暂停',starting?'':'pause',starting?'正在启动':'暂停 Agent');elements.primary.disabled=state.controlBusy||starting}
+
+  function hostOf(url){try{return new URL(url).hostname.replace(/^www\./,'')}catch{return''}}
+  function textButton(text,label,className){const button=document.createElement('button');button.type='button';button.className=className||'';button.textContent=text;button.setAttribute('aria-label',label);button.title=label;return button}
+  async function request(path,options){const response=await fetch(path,options);let data=null;try{data=await response.json()}catch{}if(!response.ok){const error=new Error('HTTP '+response.status);error.data=data;throw error}return data}
+  function schedulePanelMeasure(){cancelAnimationFrame(measureFrame);measureFrame=requestAnimationFrame(()=>{measureFrame=requestAnimationFrame(reportPanelMeasure)})}
+  async function reportPanelMeasure(){if(document.body.dataset.panel!=='open'||!canvasState.document||canvasState.document.view?.fullscreen){lastMeasuredHeight=0;return}const height=132+Math.ceil(ui.canvas.scrollHeight)+1;if(Math.abs(height-lastMeasuredHeight)<1)return;lastMeasuredHeight=height;try{await request('/api/agents/'+AGENT_ID+'/info_panel/measure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({height})})}catch{lastMeasuredHeight=0}}
+  function ingestCanvas(data){if(!data)return;canvasState.rev=Number(data.rev)||0;canvasState.expanded=Boolean(data.expanded);canvasState.activeTabId=String(data.active_tab_id||'');canvasState.document=data.document||data.payload||null;renderCanvas()}
+  async function applyCanvas(changes,tabId){if(canvasState.applying||!changes||!Object.keys(changes).length)return null;canvasState.applying=true;try{const data=await request('/api/agents/'+AGENT_ID+'/info_panel/canvas',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'apply',tab_id:tabId||'',base_rev:canvasState.rev,changes})});ingestCanvas(data);return data}catch(error){if(error.data)ingestCanvas(error.data);else await fetchCanvas();return null}finally{canvasState.applying=false}}
+  async function fetchCanvas(){if(canvasState.loading)return;canvasState.loading=true;try{ingestCanvas(await request('/api/agents/'+AGENT_ID+'/info_panel'))}catch{}finally{canvasState.loading=false}}
+  function focusNode(nodeId){return applyCanvas({view:{focus_id:nodeId,selected_id:nodeId,zoom:1,fit:'contain'}},canvasState.activeTabId)}
+  // 结论区不再复述搜索词：标题只在检索进行中当进度指示（带呼吸下划线），
+  // 出结果后那行字就只是对用户请求的重复，占掉面板最显眼的一块却不给信息。
+  function buildSummary(node,documentState){const pending=Boolean(documentState?.pending);const text=String(node?.text||'').trim();if(!pending&&!text)return null;const wrap=document.createElement('section');wrap.className='summary-card';if(pending){const title=document.createElement('h2');title.className='summary-title';title.textContent=String(node?.title||documentState?.query||documentState?.title||'正在检索').replace(/^搜索[：:]\s*/,'');wrap.appendChild(title);return wrap}const label=document.createElement('p');label.className='summary-label';label.textContent='结论';const body=document.createElement('p');body.className='summary-text';body.textContent=text;body.addEventListener('click',()=>{body.classList.toggle('is-open');schedulePanelMeasure()});wrap.append(label,body);return wrap}
+  function buildImage(node){const button=document.createElement('button');button.type='button';button.className='media-image';button.setAttribute('aria-label','放大图片');const image=document.createElement('img');image.src=node.url;image.alt=node.caption||'';image.referrerPolicy='no-referrer';image.loading='lazy';image.draggable=false;image.addEventListener('error',()=>{button.closest('.media-block')?.remove();schedulePanelMeasure()});button.appendChild(image);if(node.caption){const caption=document.createElement('span');caption.className='media-caption';caption.textContent=node.caption;button.appendChild(caption)}button.addEventListener('click',()=>focusNode(node.id));return button}
+  function buildTable(node){const wrap=document.createElement('section');wrap.className='table-node';if(node.title){const title=document.createElement('div');title.className='table-title';title.textContent=node.title;wrap.appendChild(title)}const scroller=document.createElement('div');scroller.className='table-scroll';const table=document.createElement('table'),thead=document.createElement('thead'),headRow=document.createElement('tr');(node.columns||[]).forEach(value=>{const th=document.createElement('th');th.textContent=value;headRow.appendChild(th)});thead.appendChild(headRow);const tbody=document.createElement('tbody');(node.rows||[]).slice(0,5).forEach(row=>{const tr=document.createElement('tr');(row||[]).forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.appendChild(td)});tbody.appendChild(tr)});table.append(thead,tbody);scroller.appendChild(table);wrap.appendChild(scroller);return wrap}
+  function drawChart(canvas,node){const chart=node.chart||{},width=Math.max(280,canvas.clientWidth||420),height=156,ratio=Math.min(2,devicePixelRatio||1),style=getComputedStyle(document.documentElement);canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,width,height);const values=(chart.values||[]).map(Number),labels=chart.labels||[];if(!values.length)return;const max=Math.max(...values,1),pad={l:12,r:12,t:chart.title?26:12,b:24},plotW=width-pad.l-pad.r,plotH=height-pad.t-pad.b,accent=style.getPropertyValue('--accent').trim(),line=style.getPropertyValue('--line-strong').trim(),tertiary=style.getPropertyValue('--tertiary').trim();if(chart.title){ctx.fillStyle=tertiary;ctx.font='600 10px -apple-system,sans-serif';ctx.fillText(chart.title,pad.l,13)}ctx.strokeStyle=line;ctx.beginPath();ctx.moveTo(pad.l,pad.t+plotH+.5);ctx.lineTo(pad.l+plotW,pad.t+plotH+.5);ctx.stroke();if(chart.type==='line'){ctx.beginPath();values.forEach((value,index)=>{const x=pad.l+(values.length===1?plotW/2:index/(values.length-1)*plotW),y=pad.t+plotH-value/max*plotH;index?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.strokeStyle=accent;ctx.lineWidth=2;ctx.stroke()}else{const gap=7,barWidth=Math.max(6,(plotW-gap*(values.length-1))/values.length);values.forEach((value,index)=>{const h=Math.max(1,value/max*plotH);ctx.globalAlpha=index===0?1:.62;ctx.fillStyle=accent;ctx.fillRect(pad.l+index*(barWidth+gap),pad.t+plotH-h,barWidth,h)});ctx.globalAlpha=1}ctx.fillStyle=tertiary;ctx.font='9px -apple-system,sans-serif';labels.forEach((label,index)=>ctx.fillText(String(label).slice(0,6),pad.l+index/Math.max(1,labels.length-1)*Math.max(1,plotW-24),height-6))}
+  function buildChart(node){const wrap=document.createElement('section');wrap.className='chart-node';const canvas=document.createElement('canvas');wrap.appendChild(canvas);requestAnimationFrame(()=>drawChart(canvas,node));return wrap}
+  let modelViewerPromise=null
+  function ensureModelViewer(){if(customElements.get('model-viewer'))return Promise.resolve();if(modelViewerPromise)return modelViewerPromise;modelViewerPromise=new Promise((resolve,reject)=>{const script=document.createElement('script');script.type='module';script.src='/static/vendor/model-viewer.min.js';script.addEventListener('load',resolve,{once:true});script.addEventListener('error',reject,{once:true});document.head.appendChild(script)});return modelViewerPromise}
+  function buildModel(node,focused=false){const wrap=document.createElement('section');wrap.className='model-node';const viewer=document.createElement('model-viewer');viewer.setAttribute('src',node.url);viewer.setAttribute('alt',node.description||node.title||'3D 模型');['camera-controls','auto-rotate'].forEach(name=>viewer.setAttribute(name,''));viewer.setAttribute('interaction-prompt','none');viewer.setAttribute('loading','eager');if(node.poster)viewer.setAttribute('poster',node.poster);const fallback=document.createElement('a');fallback.className='model-fallback';fallback.href=node.url;fallback.target='_blank';fallback.rel='noreferrer';fallback.textContent='正在加载 3D 模型…';viewer.addEventListener('load',()=>fallback.remove(),{once:true});viewer.addEventListener('error',()=>{fallback.textContent='模型加载失败，打开原文件'},{once:true});wrap.append(viewer,fallback);if(node.title||node.description){const caption=document.createElement('div');caption.className='model-caption';caption.textContent=node.description||node.title;wrap.appendChild(caption)}if(!focused){wrap.addEventListener('dblclick',()=>focusNode(node.id));wrap.title='双击放大模型'}ensureModelViewer().catch(()=>{fallback.textContent='3D 渲染器加载失败，打开原文件'});return wrap}
+  function buildHtml(node){const wrap=document.createElement('section');wrap.className='html-node';const frame=document.createElement('iframe');frame.sandbox='';frame.srcdoc='<meta charset="utf-8"><style>body{margin:0;padding:14px;font:12px/1.6 -apple-system,sans-serif;color:#666;background:transparent}img{max-width:100%}table{width:100%;border-collapse:collapse}td,th{padding:6px;border-bottom:1px solid #8883;text-align:left}</style>'+(node.html||'');wrap.appendChild(frame);return wrap}
+  // 面板主体是可读的项目清单：编号 + 名称 + 描述 + 链接。
+  // 此前折叠成「参考来源 ＋」且只有标题，用户既看不到内容也拿不到链接，
+  // 结论区又只是把口头回答原样复制一遍，等于什么都没多给。
+  function buildSourceCollection(nodes){const list=document.createElement('section');list.className='result-list';nodes.forEach((node,index)=>{const row=document.createElement(node.url?'a':'div');row.className='result-row';if(node.url){row.href=node.url;row.target='_blank';row.rel='noreferrer'}const idx=document.createElement('span');idx.className='result-index';idx.textContent=String(index+1).padStart(2,'0');row.appendChild(idx);const name=document.createElement('div');name.className='result-name';name.textContent=node.title||node.url||'来源';row.appendChild(name);const desc=String(node.snippet||node.summary||'').trim();if(desc){const d=document.createElement('div');d.className='result-desc';d.textContent=desc;row.appendChild(d)}const host=hostOf(node.url);if(host){const link=document.createElement('div');link.className='result-link';link.textContent=host;row.appendChild(link)}list.appendChild(row)});return list}
+  function peerNodeIds(type){const nodes=(canvasState.document||{}).nodes||{};return Object.keys(nodes).filter(id=>nodes[id]?.type===type)}
+  function stepFocus(delta){const documentState=canvasState.document||{},currentId=documentState.view?.focus_id||'',current=(documentState.nodes||{})[currentId];if(!current)return;const peers=peerNodeIds(current.type),index=peers.indexOf(currentId);if(index<0||peers.length<2)return;const next=peers[(index+delta+peers.length)%peers.length];applyCanvas({view:{focus_id:next,selected_id:next,zoom:1}},canvasState.activeTabId)}
+  function renderFocus(){const documentState=canvasState.document||{},view=documentState.view||{},node=(documentState.nodes||{})[view.focus_id];if(!node){ui.focus.classList.remove('is-open');ui.focusStage.replaceChildren();return}ui.focus.classList.add('is-open');ui.focusTitle.textContent=node.caption||node.title||node.description||documentState.title||'';ui.focusZoom.textContent=Math.round((Number(view.zoom)||1)*100)+'%';ui.focusStage.dataset.fit=['contain','cover','actual'].includes(view.fit)?view.fit:'contain';ui.focusStage.style.setProperty('--focus-zoom',String(Number(view.zoom)||1));ui.focusStage.style.setProperty('--focus-fit',view.fit==='cover'?'cover':'contain');ui.focusStage.replaceChildren();let focused=null;if(node.type==='image'){focused=document.createElement('img');focused.src=node.url;focused.alt=node.caption||'';focused.referrerPolicy='no-referrer'}else if(node.type==='model')focused=buildModel(node,true);if(focused)ui.focusStage.appendChild(focused);const peers=peerNodeIds(node.type);if(peers.length>1){const previous=textButton('‹','上一个','focus-nav focus-prev'),next=textButton('›','下一个','focus-nav focus-next');previous.addEventListener('click',()=>stepFocus(-1));next.addEventListener('click',()=>stepFocus(1));ui.focusStage.append(previous,next)}}
+  function buildTextCard(node){const wrap=document.createElement('section');wrap.className='text-card';if(node.title){const h=document.createElement('p');h.className='text-card-title';h.textContent=node.title;wrap.appendChild(h)}const body=document.createElement('div');body.textContent=node.text||'';wrap.appendChild(body);return wrap}
+  function buildNode(id,documentState){const node=(documentState.nodes||{})[id];if(!node||node.display?.hidden)return null;if(node.type==='text')return (node.role==='answer'||id==='summary')?buildSummary(node,documentState):buildTextCard(node);if(node.type==='source')return buildSourceCollection([node]);const block=document.createElement('div');block.className='media-block media-'+node.type;if(node.type==='image')block.appendChild(buildImage(node));else if(node.type==='table')block.appendChild(buildTable(node));else if(node.type==='chart')block.appendChild(buildChart(node));else if(node.type==='model')block.appendChild(buildModel(node));else if(node.type==='html')block.appendChild(buildHtml(node));else return null;if(node.display?.min_height)block.style.minHeight=node.display.min_height+'px';return block}
+  // 服务端按用户意图组装的 layout 树在这里落地：容器就是容器，节点就是节点。
+  // 整组来源合成一个编号清单，其余按 axis/columns/weights 摆——不再是固定模板。
+  function buildLayout(spec,documentState,depth){if(typeof spec==='string')return buildNode(spec,documentState);if(!spec||spec.type!=='container'||depth>6)return null;const nodes=documentState.nodes||{},kids=(spec.children||[]).filter(Boolean);const sourceKids=kids.filter(child=>typeof child==='string'&&nodes[child]?.type==='source');if(kids.length&&sourceKids.length===kids.length)return buildSourceCollection(sourceKids.map(id=>nodes[id]));const box=document.createElement('div');box.className='canvas-group';const axis=['row','column','grid'].includes(spec.axis)?spec.axis:'column';box.dataset.axis=axis;box.style.gap=Math.round((Number(spec.gap)||16)/2)+'px';if(axis==='grid')box.style.setProperty('--cols',String(Math.max(1,Math.min(6,Number(spec.columns)||2))));kids.forEach((child,index)=>{const el=buildLayout(child,documentState,depth+1);if(!el)return;const weight=Array.isArray(spec.weights)?Number(spec.weights[index]):0;if(axis==='row'&&weight>0)el.style.flex=weight+' 1 0';box.appendChild(el)});return box.childElementCount?box:null}
+  function renderCanvas(){const documentState=canvasState.document,nodes=documentState?.nodes||{},hasContent=Boolean(documentState);document.body.dataset.hasContent=hasContent?'true':'false';document.body.dataset.panel=canvasState.expanded&&hasContent?'open':'closed';ui.canvas.replaceChildren();ui.canvas.classList.toggle('is-pending',Boolean(documentState?.pending));if(!documentState){const empty=document.createElement('div');empty.className='empty-canvas';empty.textContent='搜索结果会在需要时出现在这里';ui.canvas.appendChild(empty);renderFocus();schedulePanelMeasure();return}if(documentState.pending){const summary=nodes.summary||Object.values(nodes).find(node=>node?.type==='text');const card=buildSummary(summary,documentState);if(card)ui.canvas.appendChild(card);renderFocus();schedulePanelMeasure();return}let tree=buildLayout(documentState.layout,documentState,0);if(!tree){tree=document.createElement('div');tree.className='canvas-group';tree.dataset.axis='column';tree.style.gap='8px';Object.keys(nodes).forEach(id=>{const el=buildNode(id,documentState);if(el)tree.appendChild(el)})}ui.canvas.appendChild(tree);renderFocus();schedulePanelMeasure()}
+  async function syncCanvas(rev,expanded){canvasState.expanded=Boolean(expanded);if(rev===canvasState.rev){document.body.dataset.panel=canvasState.expanded&&canvasState.document?'open':'closed';schedulePanelMeasure();return}await fetchCanvas()}
+  function patchView(path,value){return applyCanvas({view:{[path]:value}},canvasState.activeTabId)}
+  ui.collapse.addEventListener('click',()=>applyCanvas({workspace:{expanded:false}}));ui.focusFullscreen.addEventListener('click',()=>patchView('fullscreen',!Boolean(canvasState.document?.view?.fullscreen)));ui.focusClose.addEventListener('click',()=>applyCanvas({view:{focus_id:'',fullscreen:false,zoom:1}},canvasState.activeTabId));ui.zoomIn.addEventListener('click',()=>patchView('zoom',Math.min(6,(Number(canvasState.document?.view?.zoom)||1)+.25)));ui.zoomOut.addEventListener('click',()=>patchView('zoom',Math.max(.25,(Number(canvasState.document?.view?.zoom)||1)-.25)));ui.fit.addEventListener('click',()=>{const fit=canvasState.document?.view?.fit||'contain';patchView('fit',fit==='contain'?'cover':fit==='cover'?'actual':'contain')});document.addEventListener('keydown',event=>{if(!ui.focus.classList.contains('is-open'))return;if(event.key==='Escape')ui.focusClose.click();else if(event.key==='ArrowLeft')stepFocus(-1);else if(event.key==='ArrowRight')stepFocus(1);else if(event.key==='+'||event.key==='=')ui.zoomIn.click();else if(event.key==='-')ui.zoomOut.click()})
+  let uiRevision=''
+  async function checkUiRevision(){try{const data=await request('/api/ui/status-version'),next=String(data.revision||'');if(uiRevision&&next&&next!==uiRevision){location.replace('/static/status_timeline.html?v='+encodeURIComponent(next));return}if(next)uiRevision=next}catch{}}
+  async function fetchControl(){state.control=await request('/api/agents/'+AGENT_ID+'/voice/control');applyStatusTheme(state.control.status_theme)}
+  async function runControl(action){if(!action||state.controlBusy)return;state.controlBusy=true;renderStatus();try{state.control=await request('/api/agents/'+AGENT_ID+'/voice/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});state.nextControlAt=Date.now()+500}catch{rememberPhase('error',4000)}finally{state.controlBusy=false;renderStatus()}}
+  async function poll(){if(state.polling)return;state.polling=true;try{const live=await request('/api/agents/'+AGENT_ID+'/live?after='+state.liveSeq);state.live=live;const nextStreamId=String(live.stream_id||'');if(state.streamId&&nextStreamId&&nextStreamId!==state.streamId){state.liveSeq=0;state.transcriptSeq=0}if(nextStreamId)state.streamId=nextStreamId;for(const event of live.events||[])consumeEvent(event);const latestUser=live.latest_user_utterance;if(latestUser&&Number(latestUser.seq)>state.transcriptSeq)consumeEvent(latestUser);state.liveSeq=Math.max(state.liveSeq,Number(live.seq)||0);syncCanvas(Number(live.info_panel_rev)||0,live.info_panel_expanded);if(Date.now()>=state.nextControlAt){state.nextControlAt=Date.now()+CONTROL_INTERVAL_MS;await fetchControl()}renderStatus()}catch{if(!state.control||state.control.mode!=='stopped')state.control={...(state.control||{}),mode:'offline'};renderStatus()}finally{state.polling=false}}
+  elements.primary.addEventListener('click',()=>runControl(elements.primary.dataset.action));document.addEventListener('selectstart',event=>event.preventDefault());window.addEventListener('resize',()=>{document.querySelectorAll('.chart-node canvas').forEach(canvas=>{const chart=Object.values(canvasState.document?.nodes||{}).find(node=>node?.type==='chart');if(chart)drawChart(canvas,chart)});schedulePanelMeasure()})
+  renderStatus();renderCanvas();poll();checkUiRevision();setInterval(poll,LIVE_INTERVAL_MS);setInterval(checkUiRevision,2000)
+})()
+</script>
+</body>
+</html>

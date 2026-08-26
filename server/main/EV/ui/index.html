@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EV · AI Terminal</title>
+<style id="muse-boot">
+  html.muse-booting body{background:#0a0a0a}
+  html.muse-booting #app{opacity:0}
+  html.muse-ready #app{opacity:1;transition:opacity .2s ease}
+  html.pre-terminal body{background:#0a0a0a}
+  html.pre-terminal .shell .sidebar,
+  html.pre-terminal .shell .topbar{display:none!important}
+  html.pre-terminal .main,
+  html.pre-terminal .view{min-height:100vh;padding:0!important;max-width:none!important;width:100vw}
+</style>
+<script>
+(function(){
+  var p=(location.hash||'#/terminal').replace(/^#\//,'').split('/');
+  document.documentElement.classList.add('muse-booting');
+  if(p[0]==='terminal'||p[0]==='remote')document.documentElement.classList.add('pre-terminal');
+  if(p[0]==='terminal'&&p[2]==='setup')document.documentElement.classList.remove('pre-terminal');
+  if((location.pathname||'').indexOf('/remote')===0&&!location.hash)location.replace('/#/remote');
+})();
+</script>
+<link rel="stylesheet" href="/static/muse.css?v=0295">
+</head>
+<body>
+<div id="app"></div>
+
+<template id="tpl-shell">
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><span class="mark"></span><span class="name">MU<b>S</b>E</span></div>
+      <nav class="nav" id="nav">
+        <div class="lbl">Operate</div>
+        <a data-route="terminal"><span class="ico">◎</span>智能体</a>
+        <div class="lbl">Configure</div>
+        <a data-route="agents"><span class="ico">◇</span>设置模式<span class="count" id="c-agents"></span></a>
+        <a data-route="workshop"><span class="ico">▤</span>设备工坊</a>
+        <div class="lbl">System</div>
+        <a data-route="settings"><span class="ico">⚙</span>系统设置</a>
+      </nav>
+      <div class="side-foot">
+        <div class="row"><span class="led" id="coreLed">核心</span></div>
+        <div class="row"><span class="led" id="museLed">EV</span></div>
+        <div class="mono" id="verLine">muse · local agent</div>
+      </div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <button class="menu-btn" id="menuBtn">☰</button>
+        <div class="crumb" id="crumb"></div>
+        <div class="sp"></div>
+        <button class="iconbtn" id="themeBtn" title="切换主题">◐</button>
+      </header>
+      <main class="view" id="view"></main>
+    </div>
+  </div>
+</template>
+
+<script src="/static/muse.js?v=0295"></script>
+</body>
+</html>
