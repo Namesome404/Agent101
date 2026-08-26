@@ -30,7 +30,7 @@ def test_selecting_an_absent_device_says_what_is_available(monkeypatch):
     from control_plane import audio_route
 
     monkeypatch.setattr(audio_route, "_known_devices",
-                        lambda: (["MacBook Air Microphone"], ["MacBook Air Speakers"]))
+                        lambda **_: (["MacBook Air Microphone"], ["MacBook Air Speakers"]))
     result = audio_route.execute("use_output", {"device": "外星音箱"})
     assert result["ok"] is False and result["reason"] == "device_not_found"
     assert "MacBook Air Speakers" in result["detail"]
@@ -52,7 +52,7 @@ def test_selecting_writes_the_preference(monkeypatch):
 
     monkeypatch.setattr(audio_route, "_db", lambda: _DB())
     monkeypatch.setattr(audio_route, "_known_devices",
-                        lambda: (["MacBook Air Microphone"], ["AirPods Pro", "MacBook Air Speakers"]))
+                        lambda **_: (["MacBook Air Microphone"], ["AirPods Pro", "MacBook Air Speakers"]))
 
     out = audio_route.execute("use_output", {"device": "耳机"})
     assert out["ok"] and out["device"] == "AirPods Pro"
@@ -104,7 +104,7 @@ def test_switching_asks_the_terminal_to_re_enumerate(monkeypatch):
 
     monkeypatch.setattr(audio_route, "_db", lambda: _DB())
     monkeypatch.setattr(audio_route, "_known_devices",
-                        lambda: (["MacBook Air Microphone"], ["AirPods Pro"]))
+                        lambda **_: (["MacBook Air Microphone"], ["AirPods Pro"]))
 
     audio_route.execute("use_output", {"device": "耳机"})
     assert store["host.audio.rescan_token"]          # 敲过了

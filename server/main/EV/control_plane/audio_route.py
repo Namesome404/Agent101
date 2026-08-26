@@ -28,8 +28,23 @@ def _db():
     return db
 
 
-def _known_devices() -> Tuple[List[str], List[str]]:
-    """本机可见的（输入, 输出）设备名。用独立进程枚举，拿到的是当下的真值。"""
+# 设备枚举结果的短缓存。
+# 为什么必须缓存：枚举要 fork 一个 Python 子进程并在里面 import sounddevice，
+# 实测单次 77ms。而 world() 每轮语音至少被调三次（capability_hint、render、
+# _mentions_live_object），有动作再加一次，等于每轮白等 230~310ms——比工具执行
+# 本身（中位 168ms）还贵，占一轮的一成半。
+# 为什么敢缓存：过期只影响「刚插上的设备多久出现在候选里」，而真正要求立刻生效
+# 的那条路径——用户切设备——会写 rescan_token，缓存拿它当钥匙，一变就作废。
+_DEVICE_TTL_SECONDS = 5.0
+_DEVICE_CACHE = {"at": 0.0, "token": None, "value": None}
+
+
+def _enumerate_devices() -> Tuple[List[str], List[str]]:
+    """真去枚举一次。独立进程，拿到的是当下的真值。
+
+    必须是新进程：PortAudio 在进程内会缓存设备表，插拔之后同一个进程里
+    query_devices() 还是旧的。
+    """
     import subprocess
     import sys
 
@@ -45,6 +60,33 @@ def _known_devices() -> Tuple[List[str], List[str]]:
         return list(dict.fromkeys(ins)), list(dict.fromkeys(outs))
     except Exception:
         return [], []
+
+
+def _known_devices(*, max_age: float = _DEVICE_TTL_SECONDS) -> Tuple[List[str], List[str]]:
+    """本机可见的（输入, 输出）设备名。默认走短缓存；max_age=0 强制重新枚举。
+
+    切设备这类用户主动发起的动作传 max_age=0：那条路上 77ms 无所谓，
+    拿错设备名才要命。
+    """
+    now = time.time()
+    try:
+        token = str(_db().get_setting(_RESCAN_KEY, "") or "")
+    except Exception:
+        token = None
+    cached = _DEVICE_CACHE.get("value")
+    if (
+        max_age > 0
+        and cached
+        and now - float(_DEVICE_CACHE.get("at") or 0) < max_age
+        and _DEVICE_CACHE.get("token") == token
+    ):
+        return cached
+    ins, outs = _enumerate_devices()
+    if ins or outs:
+        # 枚举失败（返回空）不写缓存：那多半是一次性故障，
+        # 缓存下来会让接下来 5 秒都以为这台机器没有任何音频设备。
+        _DEVICE_CACHE.update({"at": now, "token": token, "value": (ins, outs)})
+    return ins, outs
 
 
 # 用户说的是「耳机」「扬声器」，设备名却是 AirPods Pro / MacBook Air Speakers。
@@ -93,7 +135,9 @@ def snapshot() -> Dict[str, Any]:
 def execute(command: str, args: Dict[str, Any]) -> Dict[str, Any]:
     command = str(command or "").strip()
     wanted = str((args or {}).get("device") or "").strip()
-    ins, outs = _known_devices()
+    # 用户主动切设备：必须看当下的真值。这条路一轮最多走一次，
+    # 77ms 换「刚插上的耳机立刻能选中」是划算的。status 是只读查询，走缓存。
+    ins, outs = _known_devices(max_age=0 if command != "status" else _DEVICE_TTL_SECONDS)
     db = _db()
 
     if command == "status":
