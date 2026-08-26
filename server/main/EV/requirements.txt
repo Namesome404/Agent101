@@ -1,0 +1,32 @@
+# EV 控制面（FastAPI + SQLite，:8002）的依赖清单。
+#
+# 装法（在 server/main/server/.venv 里）：
+#     pip install -r server/main/EV/requirements.txt
+#
+# 为什么单独一份：EV 一直蹭核心引擎的 server/requirements.txt，而那份里没有
+# fastapi 和 uvicorn——EV 整个服务恰恰是用这两个跑起来的。本机一直没暴露，是
+# 因为它们作为别的包的传递依赖早就装上了；换台机器照核心引擎那份装完，启动
+# EV 会直接 ImportError。
+#
+# EV 和核心引擎共用同一个虚拟环境，所以这里先原样包含那份，再补 EV 自己直接
+# import、而那份里没有的几个。用 -r 包含而不是抄一遍，是为了避免两边各写各的
+# 版本、日后对不上。
+
+-r ../server/requirements.txt
+
+# EV 服务本体
+fastapi==0.141.1
+uvicorn==0.52.0
+
+# 网页抽取（tools/web_reader.py）
+beautifulsoup4==4.15.0
+
+# 连核心引擎的 WebSocket 客户端
+websocket-client==1.9.0
+
+# 跑 tests/
+pytest==9.1.1
+
+# 可选：摄像头音频通道。devices/camera/audio.py 里是函数内按需 import，
+# 不装不影响语音终端和控制面启动，用到摄像头麦/回声通道时再装。
+# aiortc
