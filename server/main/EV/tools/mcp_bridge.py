@@ -26,17 +26,27 @@ config.yaml 一个待遇）。格式：
         },
         "chrome-dev": {
           "command": "npx",
-          "args": ["-y", "chrome-devtools-mcp@latest", "--isolated"],
+          "args": ["-y", "chrome-devtools-mcp@latest",
+                   "--isolated", "--no-page-id-routing"],
           "name": "浏览器",
           "aliases": ["chrome", "谷歌浏览器", "网页"],
-          "description": "真正的 Chrome 浏览器。开网页、切页面、截图都用它。",
-          "voice_tools": ["new_page", "navigate_page", "close_page"]
+          "description": "真正的 Chrome 浏览器。打开网站、切页面、刷新、截图都用它。",
+          "voice_tools": ["new_page", "navigate_page", "close_page", "list_pages",
+                          "select_page", "take_screenshot", "take_snapshot",
+                          "resize_page"]
         }
       }
     }
 
 两种形式都认：写 url 的是 streamable-http，每次新建会话；写 command 的是 stdio，
 EV 把它拉起来常驻——npx 冷启动要好几秒，每次重开扛不住反射层 1.5 秒的预算。
+
+上面 chrome 那条里的 --no-page-id-routing 不是可有可无：它默认开着，于是每个
+页面级工具都强制要一个 pageId，navigate_page / take_screenshot / close_page
+不带就直接报参数错。那个开关是给「多个 agent 并发操作同一个浏览器」准备的，
+语音是单会话，关掉之后这些工具作用在当前选中的页面上——正好是「这个页面」
+这个说法对应的东西。装别的 MCP 时也留意同类开关：默认值往往是照顾并发场景的，
+不一定适合一问一答。
 
 voice_tools 是白名单：只有列出来的给语音看，其余留给工作 Agent。不写就是全给。
 exclude 是黑名单：从全给里剔掉几个。写白名单之前先看启动日志，它会把每个服务的
