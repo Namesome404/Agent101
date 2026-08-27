@@ -573,14 +573,20 @@ def _execute(op: str, target: str, payload: Dict[str, Any], ctx: Dict[str, Any])
     known = {item["name"] for item in visible}
     if command not in known:
         exists = command in {item["name"] for item in tools}
-        return {
-            "ok": False,
+        if not tools and error:
+            # 清单是空的且取清单就失败了：服务没起来，不是「没有这个工具」。
+            # 说成没有会让模型以为能力缺失，转而去别处瞎试——实测把 MCP 弄坏
+            # 之后它连试了六次（含绕回已退役的 surface.new）。
+            message = "%s 连不上（%s），这轮用不了它" % (server, error[:60])
+        elif exists:
             # 存在但没分给语音，和压根没有，是两回事。说成「没有」会让模型
             # 换个名字接着猜；说清楚它归工作 Agent，模型才知道该交出去。
-            "error": (
-                "%s 的 %s 属于工作 Agent，不在语音这一层" % (server, command)
-                if exists else "%s 没有 %s 这个工具" % (server, command)
-            ),
+            message = "%s 的 %s 属于工作 Agent，不在语音这一层" % (server, command)
+        else:
+            message = "%s 没有 %s 这个工具" % (server, command)
+        return {
+            "ok": False,
+            "error": message,
             "available": sorted(known)[:20],
             "detail": error,
         }

@@ -510,3 +510,20 @@ def test_local_pages_are_not_websites():
     assert surface_tools.is_local_page("http://localhost:8002/forms/abc") is True
     assert surface_tools.is_local_page("https://www.youtube.com") is False
     assert surface_tools.is_local_page("") is False
+
+
+def test_a_dead_server_says_so_instead_of_denying_the_tool(monkeypatch):
+    """服务没起来 ≠ 没有这个工具。
+
+    实测把 MCP 弄坏之后，回执说「没有 new_page 这个工具」——工具明明存在，
+    是服务器没起来。模型据此以为能力缺失，转而去别处瞎试，连试六次，
+    其中还绕回了已经退役的 surface.new。
+    """
+    _stub(monkeypatch, error="启动失败 FileNotFoundError: 没有这个命令")
+    mcp_bridge.register_server("chrome-dev", "http://x/mcp")
+    r = mcp_bridge._execute(
+        "invoke", "mcp.chrome-dev", {"command": "new_page", "args": {}}, {},
+    )
+    assert r["ok"] is False
+    assert "连不上" in r["error"]
+    assert "没有 new_page" not in r["error"]
