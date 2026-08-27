@@ -94,11 +94,11 @@ def render(*, search_hint: str = "") -> str:
     hidden = 0
     # 行序必须稳定：目录顺序跟着 provider 的发现顺序走，同样的世界渲染出不同
     # 字节，等于白白丢掉前缀缓存，模型读到的顺序也会莫名其妙地跳。
-    _KIND_RANK = {"ui": 0, "agent_task": 1, "canvas": 2, "app": 3}
+    _KIND_RANK = {"ui": 0, "agent_task": 1, "canvas": 2, "app": 3, "mcp": 4}
     objects = sorted(
         [obj for obj in objects if isinstance(obj, dict)],
         key=lambda obj: (
-            _KIND_RANK.get(str(obj.get("kind") or ""), 4 if str(obj.get("kind") or "").startswith("iot.") else 5),
+            _KIND_RANK.get(str(obj.get("kind") or ""), 5 if str(obj.get("kind") or "").startswith("iot.") else 6),
             not bool((obj.get("state") or {}).get("focused")),
             str(obj.get("target_id") or ""),
         ),
@@ -136,6 +136,16 @@ def render(*, search_hint: str = "") -> str:
         elif kind == "canvas" and state.get("available"):
             title = str(state.get("active_title") or state.get("query") or "")[:20]
             rows.append("画布 %s%s" % (target, ("：" + title) if title else ""))
+        elif kind == "mcp":
+            # 接进来的外部能力也要在场，否则它对模型是隐形的。
+            # 实测：退掉 url 窗口之后说「打开 YouTube」，模型连 inspect 五次都在
+            # kind=surface 里翻，始终没想到浏览器——因为世界现状里根本没提过它。
+            if not state.get("reachable"):
+                rows.append("外部 %s「%s」连不上，这轮别指望它" % (target, name))
+            else:
+                rows.append("外部 %s「%s」%s" % (
+                    target, name, str(obj.get("description") or "")[:40],
+                ))
         elif kind == "agent_task" and str(state.get("phase") or "idle") != "idle":
             rows.append("工程 %s 相位=%s %s" % (
                 target, state.get("phase"), str(state.get("goal") or "")[:24]))

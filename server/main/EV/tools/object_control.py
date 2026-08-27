@@ -233,7 +233,7 @@ def _discover_builtin_objects():
             "name": "新页面",
             "kind": "surface_factory",
             "owner": "assistant",
-            "description": "创建新的页面或打开一个尚不存在的网站。",
+            "description": "创建新的桌面页面（要用户填或看的一次性内容）。打开网站不走这里，用浏览器。",
             "aliases": ["new-window", "new-surface"],
             # properties 曾是空的，模型只能猜字段名（实测它写 content=…，
             # 内容整段被丢掉，窗口只剩一个标题）。这里把能传什么写清楚。
@@ -293,6 +293,11 @@ def _discover_builtin_objects():
             surface_tools.PINNED_INFO_SURFACE,
             surface_tools.WORK_HUD_SURFACE,
         }:
+            continue
+        # 历史遗留的网站窗口不再作为对象暴露。留着它们，用户说「打开 YouTube」
+        # 时模型必然命中那个同名对象而不是浏览器——两条路并存时，名字直接命中
+        # 的那条一定赢。
+        if surface_tools.is_retired_web_surface(surface_id):
             continue
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
         objects.append({

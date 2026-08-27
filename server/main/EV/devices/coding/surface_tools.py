@@ -1000,3 +1000,41 @@ def surface_expect_input_execute(arguments, aid):
         "ok": True, "action": "start", "surface_id": surface_id, "remaining": count,
     }
     return json.dumps(meta, ensure_ascii=False), meta
+
+
+# ---- 网页归浏览器，不再开 Tauri 窗口 -------------------------------------
+# 桌面壳只留三件事：跟进工作 Agent、显示要你填/要你看的一次性页面、几个约定好的
+# 小工具（计时器、记事本、搜索结果）。「打开某个网站」不在其中——那该驱动真正的
+# Chrome（浏览器 MCP），而不是造一个套着 url 的壳窗口。
+#
+# 实测非退不可：光把浏览器 MCP 接进来没用。场景里存着历史遗留的 web-youtube-com
+# 等窗口，用户说「打开 YouTube」时模型必然命中那个同名对象，而不是浏览器。
+# 两条路并存时，名字直接命中的那条一定赢，这不是提示词能治的。
+#
+# 留一个开关是因为这条路活了很久：真出问题时 surface.web_windows=1 立刻退回去。
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def web_windows_enabled() -> bool:
+    try:
+        from control_plane import database as db
+
+        return str(db.get_setting("surface.web_windows", "0") or "0") == "1"
+    except Exception:
+        return False
+
+
+def is_local_page(url: str) -> bool:
+    """EV 自己起的页面（表单就是这么显示的）不算「网站」，照常开窗。"""
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(str(url or "")).hostname or "").lower()
+    except Exception:
+        return False
+    return host in _LOCAL_HOSTS
+
+
+def is_retired_web_surface(surface_id: str) -> bool:
+    """历史遗留的网站窗口。退役之后不再作为对象暴露给模型。"""
+    return (not web_windows_enabled()) and str(surface_id or "").startswith("web-")

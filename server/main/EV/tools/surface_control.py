@@ -454,6 +454,22 @@ def execute(arguments=None, *, aid=None):
     # （web-<host>）。这样「再打开一次 bilibili」永远命中同一个窗口，不再每次
     # 都新建 surface-<uuid>、把场景堆成一堆重复窗口。
     url_arg = str(args.get("url") or "").strip()
+    if (
+        url_arg
+        and action in ("create", "update", "show")
+        and not surface_tools.is_local_page(url_arg)
+        and not surface_tools.web_windows_enabled()
+    ):
+        # 网站归浏览器。这里不再造壳窗口，并且把该走哪条路说清楚——
+        # 只说「不支持」，模型会换个参数接着试。
+        meta = {
+            "ok": False,
+            "action": action,
+            "reason": "web_window_retired",
+            "error": "网站不在桌面窗口里开了。用浏览器对象（object_control invoke，"
+                     "命令 new_page，参数 url）真正打开它。",
+        }
+        return json.dumps(meta, ensure_ascii=False), meta
     if url_arg and not requested_surface_id and action in ("create", "update", "show"):
         stable_id = _url_surface_id(url_arg)
         if stable_id:

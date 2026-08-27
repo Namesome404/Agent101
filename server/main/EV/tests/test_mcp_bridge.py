@@ -483,3 +483,30 @@ def test_config_carries_the_names(monkeypatch, tmp_path):
     assert meta["label"] == "浏览器"
     assert meta["aliases"] == ["chrome"]
     assert "真正的 Chrome" in meta["description"]
+
+
+def test_retired_web_surfaces_stop_being_objects(monkeypatch):
+    """历史遗留的网站窗口退役后不再作为对象暴露。
+
+    留着它们，用户说「打开 YouTube」时模型必然命中 surface.web-youtube-com
+    而不是浏览器——实测两次都是这样，加了别名也没用。
+    """
+    from devices.coding import surface_tools
+
+    monkeypatch.setattr(surface_tools, "web_windows_enabled", lambda: False)
+    assert surface_tools.is_retired_web_surface("web-youtube-com") is True
+    assert surface_tools.is_retired_web_surface("form-abc") is False
+    assert surface_tools.is_retired_web_surface("app-timer") is False
+
+    monkeypatch.setattr(surface_tools, "web_windows_enabled", lambda: True)
+    assert surface_tools.is_retired_web_surface("web-youtube-com") is False
+
+
+def test_local_pages_are_not_websites():
+    """表单靠这条豁免：EV 自己起的页面照常开窗。"""
+    from devices.coding import surface_tools
+
+    assert surface_tools.is_local_page("http://127.0.0.1:8002/forms/abc") is True
+    assert surface_tools.is_local_page("http://localhost:8002/forms/abc") is True
+    assert surface_tools.is_local_page("https://www.youtube.com") is False
+    assert surface_tools.is_local_page("") is False

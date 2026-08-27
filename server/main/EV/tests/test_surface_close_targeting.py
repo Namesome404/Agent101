@@ -12,8 +12,53 @@ from unittest import mock
 from tools import surface_control
 
 
-def test_url_open_uses_stable_id_for_reuse():
-    """create 打开网站不给 surface_id → 落到 web-<host> 稳定 id（可复用）。"""
+def test_opening_a_website_is_refused_and_points_at_the_browser():
+    """网站不在桌面窗口里开了——那该驱动真正的 Chrome。
+
+    桌面壳只留三件事：跟进工作 Agent、显示要用户填/看的一次性页面、几个约定好的
+    小工具。「打开某个网站」不在其中，造一个套着 url 的壳窗口既不是浏览器、
+    也占着「打开网页」这个说法。
+
+    非退不可的实证：把浏览器 MCP 接进来之后，场景里那些历史遗留的
+    web-youtube-com 窗口仍然会被优先命中——用户说「打开 YouTube」，模型看见一个
+    字面叫 YouTube 的对象，当然点它。两条路并存时名字直接命中的一定赢，
+    这不是提示词能治的。
+
+    报错要说清该走哪条路。只说「不支持」，模型会换个参数接着试。
+    """
+    text, meta = surface_control.execute({
+        "action": "create",
+        "url": "https://www.bilibili.com",
+        "continue_after": False,
+    })
+    assert meta["ok"] is False
+    assert meta["reason"] == "web_window_retired"
+    assert "浏览器" in meta["error"] and "new_page" in meta["error"]
+
+
+def test_evs_own_pages_still_open_in_a_window():
+    """表单就是这么显示的：EV 自己起的本地页面不算「网站」，照常开窗。"""
+    with mock.patch.object(surface_control.scene_store, "get", return_value=None), \
+        mock.patch.object(
+            surface_control.surface_tools,
+            "surface_manage_execute",
+            return_value=("ok", {"ok": True, "action": "open"}),
+        ) as manage:
+        text, meta = surface_control.execute({
+            "action": "create",
+            "surface_id": "form-abc123",
+            "url": "http://127.0.0.1:8002/forms/abc123",
+            "continue_after": False,
+        })
+    assert meta.get("reason") != "web_window_retired"
+    assert manage.call_args.args[0]["surface_id"] == "form-abc123"
+
+
+def test_the_switch_brings_the_old_behaviour_back(monkeypatch):
+    """这条路活了很久，真出问题要能立刻退回去。"""
+    monkeypatch.setattr(
+        surface_control.surface_tools, "web_windows_enabled", lambda: True,
+    )
     with mock.patch.object(surface_control.scene_store, "get", return_value=None), \
         mock.patch.object(
             surface_control.surface_tools,
@@ -25,26 +70,6 @@ def test_url_open_uses_stable_id_for_reuse():
             "url": "https://www.bilibili.com",
             "continue_after": False,
         })
-    payload = manage.call_args.args[0]
-    assert payload["surface_id"] == "web-bilibili-com"
-
-
-def test_reopen_existing_url_window_reuses_not_errors():
-    """同一网站再次 create → 复用已有窗口（不报 surface_id_exists）。"""
-    existing = {"data": {"content": {"type": "url", "url": "https://www.bilibili.com"}}}
-    with mock.patch.object(surface_control.scene_store, "get", return_value=existing), \
-        mock.patch.object(
-            surface_control.surface_tools,
-            "surface_manage_execute",
-            return_value=("ok", {"ok": True, "action": "open", "title": "哔哩哔哩"}),
-        ) as manage:
-        text, meta = surface_control.execute({
-            "action": "create",
-            "url": "https://www.bilibili.com",
-            "continue_after": False,
-        })
-    assert meta["ok"] is True
-    assert meta.get("reason") != "surface_id_exists"
     assert manage.call_args.args[0]["surface_id"] == "web-bilibili-com"
 
 
