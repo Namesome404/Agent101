@@ -431,3 +431,55 @@ def test_the_tool_output_becomes_the_receipt(monkeypatch):
     assert "example.com" in r["display"]
     assert "\n" not in r["display"], "播报那句要压成一行"
     assert "## Pages" in r["text"], "完整输出仍要给模型"
+
+
+def test_a_server_can_be_pointed_at_in_plain_language(monkeypatch):
+    """接进来的 MCP 得能用人话点到，否则它对用户是隐形的。
+
+    实测漏掉的代价：说「用浏览器打开 YouTube」，模型 inspect 找了四次
+    「浏览器」「browser」都没匹配上 mcp.chrome-dev（那时它的名字就叫
+    chrome-dev、描述是「外部 MCP 服务 chrome-dev 提供的能力」），
+    最后绕回老路，12.9 秒 5 次调用。
+    """
+    _stub(monkeypatch)
+    mcp_bridge.register_server(
+        "chrome-dev", "http://x/mcp",
+        label="浏览器",
+        aliases=["chrome", "谷歌浏览器", "网页"],
+        description="真正的 Chrome 浏览器。开网页、切页面、截图都用它。",
+    )
+    mcp_bridge._refresh_catalog("chrome-dev")
+    d = mcp_bridge._descriptor("chrome-dev")
+
+    assert d["name"] == "浏览器"
+    assert "chrome" in d["aliases"] and "谷歌浏览器" in d["aliases"]
+    assert "chrome-dev" in d["aliases"], "原名也要留着，配置里是按它写的"
+    assert "Chrome 浏览器" in d["description"]
+
+
+def test_without_a_label_it_falls_back_to_the_server_name(monkeypatch):
+    _stub(monkeypatch)
+    mcp_bridge.register_server("muse-led", "http://x/mcp")
+    mcp_bridge._refresh_catalog("muse-led")
+    d = mcp_bridge._descriptor("muse-led")
+    assert d["name"] == "muse-led"
+    assert d["aliases"] == ["muse-led"]
+
+
+def test_config_carries_the_names(monkeypatch, tmp_path):
+    import json as _json
+
+    path = tmp_path / "mcp_servers.json"
+    path.write_text(_json.dumps({"mcpServers": {
+        "chrome-dev": {"command": "npx", "args": ["x"],
+                       "name": "浏览器", "aliases": ["chrome"],
+                       "description": "真正的 Chrome。"},
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mcp_bridge, "config_path", lambda: path)
+    mcp_bridge.load_from_config()
+
+    with mcp_bridge._LOCK:
+        meta = mcp_bridge._SERVERS["chrome-dev"]
+    assert meta["label"] == "浏览器"
+    assert meta["aliases"] == ["chrome"]
+    assert "真正的 Chrome" in meta["description"]

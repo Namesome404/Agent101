@@ -27,6 +27,9 @@ config.yaml 一个待遇）。格式：
         "chrome-dev": {
           "command": "npx",
           "args": ["-y", "chrome-devtools-mcp@latest", "--isolated"],
+          "name": "浏览器",
+          "aliases": ["chrome", "谷歌浏览器", "网页"],
+          "description": "真正的 Chrome 浏览器。开网页、切页面、截图都用它。",
           "voice_tools": ["new_page", "navigate_page", "close_page"]
         }
       }
@@ -83,6 +86,9 @@ def register_server(
     timeout_s: float = CALL_TIMEOUT_S,
     voice_tools: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
+    label: str = "",
+    aliases: Optional[List[str]] = None,
+    description: str = "",
 ) -> None:
     """登记一个 MCP server。只记地址，不在这里连——注册不该阻塞启动。
 
@@ -111,6 +117,12 @@ def register_server(
             "timeout_s": float(timeout_s or CALL_TIMEOUT_S),
             "voice_tools": [str(t).strip() for t in (voice_tools or []) if str(t).strip()],
             "exclude": [str(t).strip() for t in (exclude or []) if str(t).strip()],
+            # 名字和别名决定用户能不能用人话点到它。实测漏掉这个的代价：
+            # 说「用浏览器打开 YouTube」，模型连 inspect 找了四次「浏览器」
+            # 「browser」都没匹配上 mcp.chrome-dev，最后绕回老路，12.9 秒 5 次调用。
+            "label": str(label or "").strip() or server,
+            "aliases": [str(a).strip() for a in (aliases or []) if str(a).strip()],
+            "description": str(description or "").strip(),
             "tools": None,          # 缓存的工具清单（服务端说它有什么，未过滤）
             "tools_at": 0.0,
             "reachable": None,      # None=还没试过
@@ -501,11 +513,14 @@ def _descriptor(server: str) -> Dict[str, Any]:
     reachable = bool(meta.get("reachable"))
     return {
         "target_id": _target_prefix(server),
-        "name": server,
+        "name": meta.get("label") or server,
         "kind": "mcp",
         "owner": "assistant",
-        "description": "外部 MCP 服务 %s 提供的能力。" % server,
-        "aliases": [server],
+        "description": (
+            meta.get("description")
+            or "外部 MCP 服务 %s 提供的能力。" % server
+        ),
+        "aliases": list(dict.fromkeys([server] + list(meta.get("aliases") or []))),
         "commands": commands,
         "command_args": command_args,
         "properties": {},
@@ -639,6 +654,9 @@ def load_from_config() -> List[str]:
             timeout_s=float(spec.get("timeout_s") or CALL_TIMEOUT_S),
             voice_tools=spec.get("voice_tools") or [],
             exclude=spec.get("exclude") or [],
+            label=str(spec.get("name") or ""),
+            aliases=spec.get("aliases") or [],
+            description=str(spec.get("description") or ""),
         )
         loaded.append(str(name))
     return loaded
