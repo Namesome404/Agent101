@@ -241,7 +241,10 @@ def _discover_builtin_objects():
                 "title": "string",
                 "summary": "string",
                 "sections": "array",
-                "url": "string",
+                # url 曾在这儿。留着它，模型说「打开某网站」时必先来试一次
+                # surface.new/create，被拒之后才转向浏览器——白烧一整轮（1.8 秒）。
+                # 外部网站已经不在这条路上开了，这个字段只剩误导作用。
+                # EV 自己的本地页面（表单）走显式 surface_id，不靠这里。
             },
             "commands": ["create"],
         },

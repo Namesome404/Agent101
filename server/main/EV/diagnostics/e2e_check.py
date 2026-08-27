@@ -59,9 +59,16 @@ def _last_turn():
         turn = item.get("turn_id")
         if turn:
             rows.setdefault(turn, []).append(item)
-    if not rows:
+    # 取最后一个「有用户发言」的轮次。直接取最后一个 turn_id 会抓到后台写进来的
+    # 运行时事件组（surface.ready 之类），于是报出「0 次调用、0ms」这种假失败——
+    # 今晚第三次栽在自检自己身上了。
+    ordered = [
+        evs for evs in rows.values()
+        if any(e.get("event") == "user" for e in evs)
+    ]
+    if not ordered:
         return {}
-    _, events = list(rows.items())[-1]
+    events = ordered[-1]
     # conversation_reply 是「只说话」的结构化出口，不是动作。把它算成调用，
     # 「闲聊不该动工具」这条就永远不可能过——实测第一版就栽在这儿。
     calls = [

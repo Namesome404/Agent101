@@ -465,6 +465,23 @@ def _refresh_state(server: str) -> None:
         meta["state_at"] = _now()
 
 
+def _fresh_state(server: str) -> str:
+    """现取一次现状，不走缓存。
+
+    只在动作路径上用：拿它比对动作前后，判断事情到底做成没有。
+    这条路一轮最多走两次、常驻会话下一次约 1.2ms，值得用真值换掉猜测。
+    """
+    with _LOCK:
+        meta = _SERVERS.get(server)
+        if not meta or not meta.get("state_tool"):
+            return ""
+        tool, args, timeout_s = meta["state_tool"], dict(meta["state_args"]), meta["timeout_s"]
+    value, error = _talk(server, timeout_s, "call", tool=tool, args=args)
+    if error or not (value or {}).get("ok"):
+        return ""
+    return " ".join(str((value or {}).get("text") or "").split())[:400]
+
+
 def _live_state(server: str) -> str:
     """拿这个服务的现状。过期就先给旧的，后台去取新的——和工具清单同一套规矩。"""
     with _LOCK:
@@ -543,22 +560,36 @@ def _command_args(schema: Dict[str, Any], doc: str = "") -> Dict[str, str]:
     props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
     required = set(schema.get("required") or [])
     out: Dict[str, str] = {}
+    # 描述压到很短：这份投影是给模型「第一次就调对」用的，不是文档。
+    # 实测 Chrome 一家的签名块 2967 字符——是整个预算的 2.5 倍，于是它永远
+    # 进不了提示词，模型每次都得先花一轮 inspect（一轮 1.8 秒）。
     doc_text = " ".join(str(doc or "").split())
+    doc_text = doc_text.split(". ")[0].split("。")[0]
     if doc_text:
-        out["说明"] = doc_text[:110]
+        out["说明"] = doc_text[:52]
+    optional = []
     for key, spec in props.items():
         spec = spec if isinstance(spec, dict) else {}
+        if key not in required:
+            # 可选参数只留名字。这份投影是让模型「第一次就调对」用的——
+            # 必填的必须说清楚，可选的知道有这么个名字就够，真要用再 inspect。
+            # 不这么砍，光 Chrome 一家压缩后还有 1682 字符，仍然进不了预算。
+            optional.append(str(key))
+            continue
         bits = []
-        text = str(spec.get("description") or "").strip()
+        text = " ".join(str(spec.get("description") or "").split())
+        text = text.split(". ")[0].split("。")[0][:38]
         if text:
             bits.append(text)
         enum = spec.get("enum")
         if isinstance(enum, list) and enum:
-            bits.append("可选：%s" % "、".join(str(v) for v in enum[:12]))
+            bits.append("可选值：%s" % "、".join(str(v) for v in enum[:10]))
         elif spec.get("type"):
             bits.append(str(spec.get("type")))
-        bits.append("必填" if key in required else "可选")
+        bits.append("必填")
         out[str(key)] = "；".join(bits)
+    if optional:
+        out["可选参数"] = "、".join(optional[:10])
     return out
 
 
@@ -685,6 +716,12 @@ def _execute(op: str, target: str, payload: Dict[str, Any], ctx: Dict[str, Any])
         }
 
     args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+    # 动作前后各取一次现状。MCP 的 isError 只说「协议/工具层面有没有出错」，
+    # 不说「事情做成了没有」——真实事故：关掉最后一个标签页，服务返回 ok=true
+    # 而正文写着「The last open page cannot be closed」，桥照单全收，回执成了
+    # 「关掉了」，页面却还在。这是系统自己造的假回执。
+    # 各家正文没法逐个去解析，但状态能比：变了才算变。
+    before = _fresh_state(server)
     value, error = _talk(server, meta["timeout_s"], "call", tool=command, args=args)
     if error:
         with _LOCK:
@@ -697,16 +734,20 @@ def _execute(op: str, target: str, payload: Dict[str, Any], ctx: Dict[str, Any])
         # 「已经做好了」这种话。
         return {"ok": False, "changed": False, "error": error, "target_id": target}
     text = str((value or {}).get("text") or "")
+    after = _fresh_state(server)
+    # 有状态工具就以状态为准；没有就只能信服务自己说的。
+    changed = (before != after) if (before or after) else bool((value or {}).get("ok"))
     return {
         "ok": bool((value or {}).get("ok")),
-        "changed": bool((value or {}).get("ok")),
+        "changed": bool(changed),
         "target_id": target,
         "target_name": server,
         "command": command,
-        # 工具自己说的那句就是「现在什么样」，填 display 而不是 after：
-        # 注册表统一算 after，provider 报了 display 才用它，否则会回头重查
-        # 对象目录、把「reachable=是、tools=5」这种状态摘要当成结果播出去。
-        "display": " ".join(text.split())[:120],
+        # display 是「现在什么样」，所以填动作之后的真实状态，不填工具正文。
+        # 注册表拿 before/after 两个 display 比对来判断有没有变——填正文的话
+        # 每次都不一样，于是「关不掉的那个页面」也会被判成变了。
+        # 没有状态工具的服务只能退回正文。
+        "display": (after or " ".join(text.split()))[:120],
         # 完整输出给模型看（页面 id、网址、控制台内容都在这儿），
         # 播报只用上面那句短的。
         "text": text[:1200],

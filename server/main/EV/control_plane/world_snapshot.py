@@ -179,8 +179,13 @@ def render(*, search_hint: str = "") -> str:
     return "\n".join(lines)
 
 
-def capability_hint(*, max_chars: int = 1200) -> str:
+def capability_hint(*, max_chars: int = 2000) -> str:
     """凡是声明了参数形状的对象，签名都进提示。
+
+    预算 2000 而不是原来的 1200：装不下的对象会被折叠成「用到时先 inspect」，
+    而一次 inspect 就是一整轮模型（实测中位 1.8 秒）。多几百字符的提示词换掉
+    那一轮，账很好算——Chrome 接进来之后它一直落在预算外，于是每次开网页都
+    先白跑一轮。
 
     只写在描述符里不够：模型不 inspect 就看不到，而 inspect 是一整个 LLM 来回。
     灯当初就是这样一次调灯要三次调用；实测「计时30分钟」同样先猜 {"minutes":30}
