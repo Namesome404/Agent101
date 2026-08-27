@@ -143,8 +143,12 @@ def render(*, search_hint: str = "") -> str:
             if not state.get("reachable"):
                 rows.append("外部 %s「%s」连不上，这轮别指望它" % (target, name))
             else:
+                # 有现状就报现状（浏览器：当前开着哪些页面），没有才退回描述。
+                # 描述是静态的，现状才是这一轮该知道的东西。
+                detail = str(obj.get("display") or "").strip()
                 rows.append("外部 %s「%s」%s" % (
-                    target, name, str(obj.get("description") or "")[:40],
+                    target, name,
+                    detail[:60] if detail else str(obj.get("description") or "")[:40],
                 ))
         elif kind == "agent_task" and str(state.get("phase") or "idle") != "idle":
             rows.append("工程 %s 相位=%s %s" % (

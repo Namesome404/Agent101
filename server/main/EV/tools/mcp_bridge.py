@@ -60,6 +60,7 @@ exclude 是黑名单：从全给里剔掉几个。写白名单之前先看启动
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -73,6 +74,8 @@ CALL_TIMEOUT_S = 3.0
 CATALOG_TTL_S = 30.0
 # 连不上之后的冷却：别每轮都去撞一次墙，那等于每轮白等一个超时。
 UNREACHABLE_COOLDOWN_S = 20.0
+# 状态工具的缓存时长。比工具清单短得多——标签页开开关关是常事，清单几乎不变。
+STATE_TTL_S = 5.0
 
 _LOCK = threading.Lock()
 _SERVERS: Dict[str, Dict[str, Any]] = {}
@@ -99,6 +102,8 @@ def register_server(
     label: str = "",
     aliases: Optional[List[str]] = None,
     description: str = "",
+    state_tool: str = "",
+    state_args: Optional[Dict[str, Any]] = None,
 ) -> None:
     """登记一个 MCP server。只记地址，不在这里连——注册不该阻塞启动。
 
@@ -130,6 +135,17 @@ def register_server(
             # 名字和别名决定用户能不能用人话点到它。实测漏掉这个的代价：
             # 说「用浏览器打开 YouTube」，模型连 inspect 找了四次「浏览器」
             # 「browser」都没匹配上 mcp.chrome-dev，最后绕回老路，12.9 秒 5 次调用。
+            # 一个只读工具，用来把「这个服务现在什么样」变成对象的 state。
+            # 浏览器写 list_pages，于是当前开着哪些页面就成了世界现状的一部分，
+            # 兜底判据（说到真实存在的东西却没有回执就回炉）也跟着白拿一层。
+            # 后台按 STATE_TTL_S 刷新，永远不在回合的关键路径上取——
+            # 实测常驻会话下一次 list_pages 只要 1.2ms，但最慢过 94ms，
+            # 而且服务卡住时就是一个完整超时，不能让它砸在用户这一轮上。
+            "state_tool": str(state_tool or "").strip(),
+            "state_args": dict(state_args or {}),
+            "state_text": "",
+            "state_at": 0.0,
+            "state_refreshing": False,
             "label": str(label or "").strip() or server,
             "aliases": [str(a).strip() for a in (aliases or []) if str(a).strip()],
             "description": str(description or "").strip(),
@@ -429,6 +445,44 @@ def _refresh_catalog(server: str) -> None:
         meta["cooldown_until"] = 0.0
 
 
+def _refresh_state(server: str) -> None:
+    """调一次状态工具，把结果记成对象的现状。只在后台线程里跑。"""
+    with _LOCK:
+        meta = _SERVERS.get(server)
+        if not meta or meta.get("state_refreshing") or not meta.get("state_tool"):
+            return
+        meta["state_refreshing"] = True
+        tool, args, timeout_s = meta["state_tool"], dict(meta["state_args"]), meta["timeout_s"]
+    value, error = _talk(server, timeout_s, "call", tool=tool, args=args)
+    with _LOCK:
+        meta = _SERVERS.get(server)
+        if not meta:
+            return
+        meta["state_refreshing"] = False
+        if error or not (value or {}).get("ok"):
+            return
+        meta["state_text"] = " ".join(str((value or {}).get("text") or "").split())[:400]
+        meta["state_at"] = _now()
+
+
+def _live_state(server: str) -> str:
+    """拿这个服务的现状。过期就先给旧的，后台去取新的——和工具清单同一套规矩。"""
+    with _LOCK:
+        meta = _SERVERS.get(server)
+        if not meta or not meta.get("state_tool"):
+            return ""
+        now = _now()
+        stale = now - float(meta.get("state_at") or 0) >= STATE_TTL_S
+        need = stale and not meta.get("state_refreshing") and now >= meta["cooldown_until"]
+        cached = str(meta.get("state_text") or "")
+    if need:
+        threading.Thread(
+            target=_refresh_state, args=(server,), daemon=True,
+            name="mcp-state-%s" % server,
+        ).start()
+    return cached
+
+
 def _catalog(server: str, *, allow_blocking: bool = False) -> Tuple[List[Dict[str, Any]], str]:
     """拿工具清单。默认永远不在这里等网络。
 
@@ -508,6 +562,38 @@ def _command_args(schema: Dict[str, Any], doc: str = "") -> Dict[str, str]:
     return out
 
 
+_HOST_RE = re.compile(r"https?://([^/\s)\]]+)")
+
+
+def _state_aliases(server: str) -> List[str]:
+    """从服务现状里抽出用户会怎么称呼它现在管着的东西。
+
+    浏览器的现状是一串页面网址，用户说的却是「百度」「B站」。以前这层由
+    web-* 窗口对象承担（它们的别名带着站点中文名），那些窗口退役之后就断了：
+    说「百度已经打开了」而没有回执时，兜底判据认不出「百度」是真实存在的东西。
+
+    这里把当前开着的站点重新变成别名，用的还是那张站点叫法表。
+    """
+    text = _live_state(server)
+    if not text:
+        return []
+    out: List[str] = []
+    for host in _HOST_RE.findall(text)[:12]:
+        host = host.lower().split(":")[0].removeprefix("www.")
+        if not host or host in ("localhost",):
+            continue
+        label = host.split(".")[0]
+        out.append(host)
+        out.append(label)
+        try:
+            from tools import object_control
+
+            out.extend(object_control.site_aliases(label))
+        except Exception:
+            pass
+    return [a for a in dict.fromkeys(out) if len(a) >= 2][:20]
+
+
 def _descriptor(server: str) -> Dict[str, Any]:
     tools, error = _catalog(server)
     with _LOCK:
@@ -530,14 +616,21 @@ def _descriptor(server: str) -> Dict[str, Any]:
             meta.get("description")
             or "外部 MCP 服务 %s 提供的能力。" % server
         ),
-        "aliases": list(dict.fromkeys([server] + list(meta.get("aliases") or []))),
+        "aliases": list(dict.fromkeys(
+            [server] + list(meta.get("aliases") or []) + _state_aliases(server)
+        )),
         "commands": commands,
         "command_args": command_args,
         "properties": {},
+        "display": _live_state(server)[:120],
         "state": {
             # 连不上要如实说。世界快照照实投影，模型才不会对着一个
             # 连不上的东西许诺「已经做好了」。
             "reachable": reachable,
+            # 服务自己报的现状（浏览器就是当前开着哪些页面）。放进 state 之后，
+            # 「百度已经打开了」这种话就能被兜底判据认出来——它本来只认对象名
+            # 和别名，网站名不在其中。
+            "detail": _live_state(server),
             "tools": len(commands),
             # 有多少工具留给了工作 Agent。如实说出来，模型才知道
             # 「这个服务还有别的能力，只是不归我管」，不会去猜命令名。
@@ -673,6 +766,8 @@ def load_from_config() -> List[str]:
             label=str(spec.get("name") or ""),
             aliases=spec.get("aliases") or [],
             description=str(spec.get("description") or ""),
+            state_tool=str(spec.get("state_tool") or ""),
+            state_args=spec.get("state_args") or {},
         )
         loaded.append(str(name))
     return loaded
@@ -685,6 +780,7 @@ def _warm_and_report(server: str) -> None:
     并标出哪些没进语音层。
     """
     _refresh_catalog(server)
+    _refresh_state(server)
     tools, _ = _catalog(server)
     if not tools:
         return

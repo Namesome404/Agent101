@@ -512,6 +512,12 @@ def _execute_canvas(op: str, payload: dict) -> dict:
 # 标题 Bilibili），用户说「把哔哩哔哩关上」时子串一个都对不上，模型只能回
 # 「没找到哔哩哔哩，可能没装或者叫别的名」——实测日志里就是这么答的。
 # 这是一张数据表，不是逻辑：以后接新站点往里加一行即可。
+def site_aliases(label: str) -> list:
+    """站点英文名 → 中文叫法。桥也要用：浏览器对象的别名得跟着当前标签页走，
+    否则「百度已经打开了」这种话没有任何东西认得出来。"""
+    return list(_SITE_ALIASES.get(str(label or "").strip().lower(), []))
+
+
 _SITE_ALIASES = {
     "bilibili": ["哔哩哔哩", "b站", "比站"],
     "zhihu": ["知乎"],

@@ -527,3 +527,51 @@ def test_a_dead_server_says_so_instead_of_denying_the_tool(monkeypatch):
     assert r["ok"] is False
     assert "连不上" in r["error"]
     assert "没有 new_page" not in r["error"]
+
+
+def test_a_state_tool_turns_the_service_status_into_object_state(monkeypatch):
+    """服务的现状要变成对象的 state，否则模型只知道它存在、不知道它现在什么样。"""
+    def fake(url, timeout_s, action, **kwargs):
+        if action == "list":
+            return list(LED_TOOLS), ""
+        return {"ok": True, "text": "## Pages\n1: 百度一下 (https://www.baidu.com/)"}, ""
+
+    monkeypatch.setattr(mcp_bridge, "_call_blocking", fake)
+    mcp_bridge.register_server("chrome-dev", "http://x/mcp", state_tool="list_pages")
+    mcp_bridge._refresh_catalog("chrome-dev")
+    mcp_bridge._refresh_state("chrome-dev")
+    d = mcp_bridge._descriptor("chrome-dev")
+
+    assert "百度一下" in d["state"]["detail"]
+    assert "百度一下" in d["display"]
+
+
+def test_open_sites_become_aliases(monkeypatch):
+    """用户说的是「百度」，服务报的是网址。这层断了，「百度已经打开了」
+    就没有任何东西认得出来——以前由 web-* 窗口的站点别名承担，它们退役了。
+    """
+    def fake(url, timeout_s, action, **kwargs):
+        if action == "list":
+            return list(LED_TOOLS), ""
+        return {"ok": True, "text": "1: (https://www.baidu.com/) 2: (https://www.bilibili.com/)"}, ""
+
+    monkeypatch.setattr(mcp_bridge, "_call_blocking", fake)
+    mcp_bridge.register_server("chrome-dev", "http://x/mcp", state_tool="list_pages")
+    mcp_bridge._refresh_catalog("chrome-dev")
+    mcp_bridge._refresh_state("chrome-dev")
+    aliases = mcp_bridge._descriptor("chrome-dev")["aliases"]
+
+    assert "百度" in aliases and "哔哩哔哩" in aliases
+    assert "baidu" in aliases and "baidu.com" in aliases
+
+
+def test_no_state_tool_means_no_extra_calls(monkeypatch):
+    """没声明状态工具的服务一切照旧，不会平白多出往返。"""
+    calls = []
+    _stub(monkeypatch, calls=calls)
+    mcp_bridge.register_server("muse-led", "http://x/mcp")
+    mcp_bridge._refresh_catalog("muse-led")
+    before = len(calls)
+    mcp_bridge._descriptor("muse-led")
+    mcp_bridge._descriptor("muse-led")
+    assert len(calls) == before
