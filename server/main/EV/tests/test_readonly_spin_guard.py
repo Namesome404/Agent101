@@ -405,3 +405,50 @@ def test_unbacked_claim_also_catches_device_values_and_forces_a_tool():
         had_mutation_receipt=False, search_result=None, constrained_empty=False,
     )
     assert reason == "unbacked_claim"
+
+
+def test_claiming_an_action_without_calling_anything_is_caught():
+    """零调用却说「做完了」要回炉——哪怕说的东西不在对象目录里。
+
+    真实事故（trace 15:14:11 与 15:14:24）：「打开维基百科」，模型一个工具都没调，
+    直接说「维基百科打开了」；下一句「重新打开维基百科」照样零调用。
+    _mentions_live_object 拦不住：「维基百科」既不是对象名，也不在当前标签页里。
+
+    对照实验证明这不是 MCP 带来的——同一段历史下，退回 url 窗口那条老路一样
+    2/3 零调用。变量是历史：空历史 0/6，带上「连续几次成功动作」的真实历史就塌。
+    加上这条判据之后同一组条件 3/3 → 0/3。
+    """
+    import app
+
+    for text in ["维基百科打开了。", "维基百科重新打开了。", "斯坦福官网已经打开了。"]:
+        assert app._claims_completed_action(text) is True, text
+        reason, _ = app._voice_answer_retry(
+            text=text, had_tool_call=False, had_mutation_receipt=False,
+            search_result=None, constrained_empty=False,
+        )
+        assert reason == "unbacked_claim", text
+
+
+def test_ordinary_chat_is_not_mistaken_for_a_claim():
+    """这是模式匹配，今晚已经栽过一次（按问号判，9 次误伤 8 次），所以先量后上：
+    136 条真实的零调用回复里只命中 3 条，3 条全是真幻觉。这里钉住负例。"""
+    import app
+
+    for text in [
+        "好，我在这儿。", "明白，不打扰你了。", "行，到点我喊你。",
+        "你好。有什么需要我做的？", "我是 EV，你的私人智能管家。",
+        "好，讲一个。程序员最讨厌的两件事……", "在的。您说。",
+        "23点半，对大多数人来说确实该准备睡了。",
+    ]:
+        assert app._claims_completed_action(text) is False, text
+
+
+def test_a_real_receipt_still_lets_it_speak():
+    """真调了工具就不该被这条拦下——否则每次成功动作都要白烧一轮。"""
+    import app
+
+    reason, _ = app._voice_answer_retry(
+        text="维基百科打开了。", had_tool_call=True, had_mutation_receipt=True,
+        search_result=None, constrained_empty=False,
+    )
+    assert reason == ""

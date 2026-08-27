@@ -2651,6 +2651,12 @@ def _voice_answer_retry(*, text, had_tool_call, had_mutation_receipt,
             "用你自己的话重说一遍：找到了哪些相关的东西、还缺哪一条才敢下结论、"
             "建议用户怎么问更容易查到。不要编没有出处的数字或链接。"
         )
+    if not had_tool_call and _claims_completed_action(body):
+        return "unbacked_claim", (
+            "你刚才没有调用任何工具，所以外面什么都没变。"
+            "如果用户要的是动作，现在就调工具真正去做；"
+            "如果只是聊天或转述现状，就把要说的话原样再说一遍，但不许说成已经做完。"
+        )
     if not had_mutation_receipt and _mentions_live_object(body):
         return "unbacked_claim", (
             "你刚才没有调用任何工具，所以外面什么都没变。"
@@ -2669,6 +2675,30 @@ def _voice_answer_retry(*, text, had_tool_call, had_mutation_receipt,
     # 路由卡在事前解决，不该靠事后回炉去抓。
     return "", ""
 
+
+
+# 「我把某件事做完了」的说法。动作词 + 完成助词，中间允许夹几个字
+# （「斯坦福官网已经打开了」）。
+_DONE_CLAIM_RE = re.compile(
+    r"(打开|关掉|关上|关闭|切换|切到|调到|调成|设成|设好|定好|开好|加好|"
+    r"重启|重新打开|删掉|删除|保存|发送)[^。！？!?]{0,8}(好了|完了|了)"
+)
+
+
+def _claims_completed_action(text) -> bool:
+    """这句话在说「我已经把某件事做完了」吗？
+
+    补 _mentions_live_object 盖不住的那一半：它拿对象目录里的名字比对，可用户
+    要打开的网站往往根本不在目录里——真实事故：「打开维基百科」，模型一个工具
+    都没调，直接说「维基百科打开了」；「维基百科」既不是对象名，也不在当前标签页
+    里，那道判据一点办法没有。而它上一轮刚成功打开过 YouTube——历史里有一条成功
+    示范，模型就认为这次说一句即可。
+
+    这是模式匹配，今晚已经栽过一次（按问号判「该动手却反问」，9 次误伤 8 次），
+    所以先量了再上：拿 136 条真实的零调用回复跑，命中 3 条，3 条全是真幻觉
+    （维基百科两条、斯坦福官网一条），133 条正常闲聊零误伤。
+    """
+    return bool(_DONE_CLAIM_RE.search(str(text or "")))
 
 
 def _mentions_live_object(text) -> bool:
