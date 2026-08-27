@@ -307,13 +307,27 @@ class ObjectCapabilityRegistry:
             # Catalog discovery stays compact. Exact inspect returns full state.
             clean.pop("state", None)
             public.append(clean)
-        return {
+        result = {
             "ok": True,
             "op": "inspect",
             "objects": public,
             "count": len(public),
             "truncated": len(matches) > len(scoped),
         }
+        if not public:
+            # 空结果必须带上纠正线索，否则模型只会换个词接着猜。
+            # 实测：说「打开百度」，模型连查六次都带着 selector.kind="surface"
+            # ——浏览器是 kind="mcp"，永远筛不到；而空结果只回一个 ok:true，
+            # 它无从知道自己筛错了维度。
+            wanted_kind = str((selector or {}).get("kind") or "").strip()
+            kinds = sorted({str(item.get("kind") or "") for item in catalog if item.get("kind")})
+            result["hint"] = (
+                "没有匹配的对象。现有种类：%s。" % "、".join(kinds)
+                + ("你按 kind=%s 筛，换个种类或者干脆不写 kind 再试。" % wanted_kind
+                   if wanted_kind else "把 query 换成对象名里的词，或者不写 selector 看全量。")
+            )
+            result["kinds"] = kinds
+        return result
 
 
     _AMOUNTS = {"small": 1, "medium": 2, "large": 4}

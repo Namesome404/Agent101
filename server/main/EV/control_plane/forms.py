@@ -190,7 +190,12 @@ def open_window(form_id: str, *, title: str = "", base_url: str = "") -> Dict[st
             "position": "center",
         })
         return {
-            "ok": bool(meta.get("ok")),
+            # 看场景状态变没变，不看桌面壳确认了没有。meta["ok"] 的含义是
+            # 「壳回执 rendered=true」，而壳可能还没给这扇新窗建 webview——
+            # 实测 accepted=true、changed=true、窗口确实在，ok 却是 false。
+            # 用 ok 当判据就会把「开好了但壳还没画」误报成失败。
+            "ok": bool(meta.get("ok") or meta.get("accepted") or meta.get("created")),
+            "rendered": bool(meta.get("rendered")),
             "surface_id": surface_id_of(form_id),
             "detail": str(meta.get("reason") or meta.get("error") or "")[:120],
         }
@@ -206,7 +211,9 @@ def close_window(form_id: str) -> Dict[str, Any]:
         _, meta = surface_control.execute({
             "action": "close", "surface_id": surface_id_of(form_id),
         })
-        return {"ok": bool(meta.get("ok"))}
+        # surface_control 的 close 已经按「状态变没变」判定（不再拿桌面壳的
+        # 渲染回执当判据），这里直接信它。
+        return {"ok": bool(meta.get("ok") or meta.get("already_closed"))}
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:120]}
 

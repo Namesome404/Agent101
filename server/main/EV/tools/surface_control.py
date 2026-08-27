@@ -595,7 +595,12 @@ def execute(arguments=None, *, aid=None):
                 "action": "close",
                 "surface_id": sid,
             })
-            if m.get("ok"):
+            # ok 的含义是「桌面壳回执 rendered=true」，不是「窗口关没关」。
+            # 壳可能还没给这扇窗建 webview（刚开的窗尤其如此），这时
+            # accepted=true、changed=true、visible 已经是 false——窗口确实关了，
+            # 拿 ok 当判据就会误报成「一个都没关掉」。实测表单填完自动关窗
+            # 一直报失败，就是栽在这儿。
+            if m.get("ok") or m.get("accepted") or m.get("changed"):
                 closed.append(sid)
         meta = {
             "ok": len(closed) == len(visible_ids),
