@@ -194,7 +194,34 @@ def capability_hint(*, max_chars: int = 1200) -> str:
             ))
     if not lines:
         return ""
-    return (
-        "【对象命令的参数形状】（已给全，直接 invoke，不必先 inspect；不要自造命令名或参数名）\n"
-        + "\n".join(lines)[:max_chars]
-    )
+    # 按字符硬切会把最后一条切成半句（实测接一个 6 工具的 MCP 就越界：
+    # 「red=integer；必填」之后直接断掉，led_effect / led_set 整个消失），
+    # 而抬头还写着「已给全」——模型于是以为自己拿到了全部签名，转头自造参数。
+    # 改成按对象为单位取，装不下的整块不要，并在抬头如实说还有几个没列。
+    kept, used, dropped = [], 0, 0
+    block: List[str] = []
+    for line in lines + [""]:
+        if line.startswith("- ") or line == "":
+            if block:
+                size = sum(len(item) + 1 for item in block)
+                if used + size <= max_chars:
+                    kept.extend(block)
+                    used += size
+                else:
+                    dropped += 1
+            block = []
+        if line:
+            block.append(line)
+    if not kept:
+        return ""
+    if dropped:
+        head = (
+            "【对象命令的参数形状】（列出来的直接 invoke，不必先 inspect；"
+            "另有 %d 个对象没列出来，用到时先 inspect 拿参数，别自造参数名）\n" % dropped
+        )
+    else:
+        head = (
+            "【对象命令的参数形状】（已给全，直接 invoke，不必先 inspect；"
+            "不要自造命令名或参数名）\n"
+        )
+    return head + "\n".join(kept)
