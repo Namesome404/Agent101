@@ -163,6 +163,9 @@ class ObjectCapabilityRegistry:
             "aliases": aliases[:20],
             "properties": copy.deepcopy(raw.get("properties") or {}),
             "commands": copy.deepcopy(raw.get("commands") or []),
+            # 常驻能力：参数签名一直留在提示词里，不参与预算排队。
+            # 天天要用的东西被挤出去，就得先 inspect 找一遍——那是一整轮模型。
+            "pinned": bool(raw.get("pinned")),
             # 命令的参数形状属于对象契约：只给命令名，调用方只能靠报错试出
             # 参数怎么写。任何 provider（含以后接进来的 MCP 能力）都能带上。
             "command_args": copy.deepcopy(raw.get("command_args") or {}),

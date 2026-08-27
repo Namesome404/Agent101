@@ -575,3 +575,51 @@ def test_no_state_tool_means_no_extra_calls(monkeypatch):
     mcp_bridge._descriptor("muse-led")
     mcp_bridge._descriptor("muse-led")
     assert len(calls) == before
+
+
+def test_a_resident_server_is_never_folded_away(monkeypatch):
+    """常驻的能力，签名一直留在提示词里，不参与预算排队。
+
+    被折叠成「用到时先 inspect」就等于每次用都白烧一整轮模型（中位 1.8 秒）。
+    浏览器、微信这类天天要用的东西不该有这个风险——之前是靠把预算抬高让它
+    碰巧装得下，对象一多照样掉出去。
+    """
+    from control_plane import world_snapshot
+
+    _stub(monkeypatch)
+    mcp_bridge.ensure_provider()
+    mcp_bridge.register_server("chrome-dev", "http://x/mcp", resident=True)
+    mcp_bridge._refresh_catalog("chrome-dev")
+
+    assert mcp_bridge._descriptor("chrome-dev")["pinned"] is True
+    listed = [
+        line[2:].split("（")[0]
+        for line in world_snapshot.capability_hint(max_chars=120).splitlines()
+        if line.startswith("- ")
+    ]
+    assert "mcp.chrome-dev" in listed, "预算再紧也不该把常驻的挤掉：%s" % listed
+    assert listed[0] == "mcp.chrome-dev", "常驻的要排最前"
+
+
+def test_a_normal_server_still_queues_by_budget(monkeypatch):
+    """没声明常驻的照旧参与排队——常驻是选出来的，不是默认。"""
+    _stub(monkeypatch)
+    mcp_bridge.register_server("muse-led", "http://x/mcp")
+    mcp_bridge._refresh_catalog("muse-led")
+    assert mcp_bridge._descriptor("muse-led")["pinned"] is False
+
+
+def test_config_carries_resident(monkeypatch, tmp_path):
+    import json as _json
+
+    path = tmp_path / "mcp_servers.json"
+    path.write_text(_json.dumps({"mcpServers": {
+        "chrome-dev": {"command": "npx", "args": ["x"], "resident": True},
+        "wechat": {"command": "npx", "args": ["y"]},
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mcp_bridge, "config_path", lambda: path)
+    mcp_bridge.load_from_config()
+
+    with mcp_bridge._LOCK:
+        assert mcp_bridge._SERVERS["chrome-dev"]["resident"] is True
+        assert mcp_bridge._SERVERS["wechat"]["resident"] is False

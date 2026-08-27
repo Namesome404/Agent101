@@ -206,15 +206,20 @@ def capability_hint(*, max_chars: int = 2000) -> str:
 
     def _order(obj):
         target = str(obj.get("target_id") or "")
-        return (-usage_rank(target), target)
+        # 常驻的排最前，其次按用量。
+        return (0 if obj.get("pinned") else 1, -usage_rank(target), target)
 
     lines = []
+    pinned_lines = set()
     for obj in sorted(objects or [], key=_order):
         shapes = obj.get("command_args") if isinstance(obj.get("command_args"), dict) else {}
         shapes = {k: v for k, v in shapes.items() if v}
         if not shapes:
             continue
-        lines.append("- %s（%s）" % (obj.get("target_id"), str(obj.get("name") or "")[:16]))
+        head = "- %s（%s）" % (obj.get("target_id"), str(obj.get("name") or "")[:16])
+        if obj.get("pinned"):
+            pinned_lines.add(head)
+        lines.append(head)
         for command, args in shapes.items():
             lines.append("  %s：%s" % (
                 command, "；".join("%s=%s" % (k, v) for k, v in args.items()),
@@ -231,7 +236,9 @@ def capability_hint(*, max_chars: int = 2000) -> str:
         if line.startswith("- ") or line == "":
             if block:
                 size = sum(len(item) + 1 for item in block)
-                if used + size <= max_chars:
+                # 常驻的一定留下，哪怕超预算：它被折叠成「用到时先 inspect」，
+                # 就等于每次用都白烧一整轮模型，比多几百字符贵得多。
+                if used + size <= max_chars or block[0] in pinned_lines:
                     kept.extend(block)
                     used += size
                 else:

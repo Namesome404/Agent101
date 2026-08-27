@@ -28,6 +28,8 @@ config.yaml 一个待遇）。格式：
           "command": "npx",
           "args": ["-y", "chrome-devtools-mcp@latest",
                    "--isolated", "--no-page-id-routing"],
+          "resident": true,
+          "state_tool": "list_pages",
           "name": "浏览器",
           "aliases": ["chrome", "谷歌浏览器", "网页"],
           "description": "真正的 Chrome 浏览器。打开网站、切页面、刷新、截图都用它。",
@@ -47,6 +49,11 @@ EV 把它拉起来常驻——npx 冷启动要好几秒，每次重开扛不住�
 语音是单会话，关掉之后这些工具作用在当前选中的页面上——正好是「这个页面」
 这个说法对应的东西。装别的 MCP 时也留意同类开关：默认值往往是照顾并发场景的，
 不一定适合一问一答。
+
+resident=true 表示常驻：命令签名一直留在提示词里，不参与预算排队。浏览器、微信
+这类天天要用的应该标上——被折叠成「用到时先 inspect」，每次用都白烧一整轮模型。
+state_tool 指一个只读工具（浏览器写 list_pages）：它的输出成为对象的现状，
+既进世界快照，也用来比对动作前后判断事情到底做成没有。
 
 voice_tools 是白名单：只有列出来的给语音看，其余留给工作 Agent。不写就是全给。
 exclude 是黑名单：从全给里剔掉几个。写白名单之前先看启动日志，它会把每个服务的
@@ -104,6 +111,7 @@ def register_server(
     description: str = "",
     state_tool: str = "",
     state_args: Optional[Dict[str, Any]] = None,
+    resident: bool = False,
 ) -> None:
     """登记一个 MCP server。只记地址，不在这里连——注册不该阻塞启动。
 
@@ -141,6 +149,11 @@ def register_server(
             # 后台按 STATE_TTL_S 刷新，永远不在回合的关键路径上取——
             # 实测常驻会话下一次 list_pages 只要 1.2ms，但最慢过 94ms，
             # 而且服务卡住时就是一个完整超时，不能让它砸在用户这一轮上。
+            # 常驻：命令签名一直摆在提示词里，不参与预算排队。
+            # 浏览器、微信这类是天天要用的，被挤出去就退化成「先 inspect 找一遍」
+            # ——那是一整轮模型（实测中位 1.8 秒）。之前靠把预算抬高让它碰巧装得下，
+            # 对象一多照样掉出去；声明成常驻才是确定的。
+            "resident": bool(resident),
             "state_tool": str(state_tool or "").strip(),
             "state_args": dict(state_args or {}),
             "state_text": "",
@@ -643,6 +656,7 @@ def _descriptor(server: str) -> Dict[str, Any]:
         "name": meta.get("label") or server,
         "kind": "mcp",
         "owner": "assistant",
+        "pinned": bool(meta.get("resident")),
         "description": (
             meta.get("description")
             or "外部 MCP 服务 %s 提供的能力。" % server
@@ -809,6 +823,7 @@ def load_from_config() -> List[str]:
             description=str(spec.get("description") or ""),
             state_tool=str(spec.get("state_tool") or ""),
             state_args=spec.get("state_args") or {},
+            resident=bool(spec.get("resident")),
         )
         loaded.append(str(name))
     return loaded
