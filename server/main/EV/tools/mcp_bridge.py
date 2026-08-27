@@ -14,6 +14,19 @@
 这样接进来的能力，模型照旧只用 object_control 操作，不多一个工具、不多一个字
 的提示词——对象注册表已经量过：加 1200 个对象，每轮提示词零增长。
 
+装一个 MCP 就是往 data/mcp_servers.json 里加一行（data/ 已 gitignore，和
+config.yaml 一个待遇）。格式：
+
+    {
+      "mcpServers": {
+        "muse-led": {"url": "http://127.0.0.1:8012/mcp", "timeout_s": 3},
+        "chrome":   {"url": "http://127.0.0.1:9222/mcp", "enabled": false}
+      }
+    }
+
+只认 url 形式（streamable-http）。stdio 形式的 server 要由 EV 拉起子进程并管住
+它的生死，那是另一件事，不混在这一层做。
+
 超时是这一层的生命线，不是可选项。反射层的全部价值是一个来回约 1.5 秒；桥连的
 是另一个进程，它卡住就把整轮语音的预算吃光。所以：每次调用都带硬超时，超时即
 降级——这一轮当这个能力不存在，并把 reachable=False 如实写进 state，让世界快照
@@ -133,35 +146,66 @@ def _call_blocking(url: str, timeout_s: float, action: str, **kwargs) -> Tuple[A
     return box.get("value"), ""
 
 
-def _catalog(server: str) -> Tuple[List[Dict[str, Any]], str]:
-    """拿某个 server 的工具清单，走缓存与冷却。"""
+def _refresh_catalog(server: str) -> None:
+    """去取一次清单并写回缓存。只在后台线程里跑。"""
     with _LOCK:
         meta = _SERVERS.get(server)
-        if not meta:
-            return [], "未登记"
-        now = _now()
-        if meta["tools"] is not None and now - meta["tools_at"] < CATALOG_TTL_S:
-            return list(meta["tools"]), ""
-        if now < meta["cooldown_until"]:
-            return list(meta["tools"] or []), meta["error"] or "暂时不可达"
+        if not meta or meta.get("refreshing"):
+            return
+        meta["refreshing"] = True
         url, timeout_s = meta["url"], meta["timeout_s"]
-
     tools, error = _call_blocking(url, timeout_s, "list")
     with _LOCK:
         meta = _SERVERS.get(server)
         if not meta:
-            return [], "未登记"
+            return
+        meta["refreshing"] = False
         if error:
             meta["reachable"] = False
             meta["error"] = error
             meta["cooldown_until"] = _now() + UNREACHABLE_COOLDOWN_S
-            return list(meta["tools"] or []), error
+            return
         meta["tools"] = tools or []
         meta["tools_at"] = _now()
         meta["reachable"] = True
         meta["error"] = ""
         meta["cooldown_until"] = 0.0
-        return list(meta["tools"]), ""
+
+
+def _catalog(server: str, *, allow_blocking: bool = False) -> Tuple[List[Dict[str, Any]], str]:
+    """拿工具清单。默认永远不在这里等网络。
+
+    清单每轮语音都要用（世界现状、参数形状都读它）。要是在这儿现取，
+    一次往返就砸在那个倒霉的回合上——实测一个连不上设备的 MCP 单次往返
+    2.5 秒，而一轮语音的总预算才 1.5 秒。
+    所以：过期了就把旧的先给出去，同时在后台线程去取新的，下一轮自然是新的。
+
+    allow_blocking 只给 invoke 用：那是用户主动发起的动作，冷缓存时宁可等一下，
+    也不能误报「没有这个工具」——清单还没取回来就说工具不存在，是把自己的时序
+    问题说成对方的能力缺失。
+    """
+    with _LOCK:
+        meta = _SERVERS.get(server)
+        if not meta:
+            return [], "未登记"
+        now = _now()
+        fresh = meta["tools"] is not None and now - meta["tools_at"] < CATALOG_TTL_S
+        cooling = now < meta["cooldown_until"]
+        cached = list(meta["tools"] or [])
+        error = "" if fresh else (meta["error"] or "")
+        need = not fresh and not cooling and not meta.get("refreshing")
+        never_fetched = meta["tools"] is None
+    if allow_blocking and never_fetched and not cooling:
+        _refresh_catalog(server)
+        with _LOCK:
+            meta = _SERVERS.get(server) or {}
+            return list(meta.get("tools") or []), str(meta.get("error") or "")
+    if need:
+        threading.Thread(
+            target=_refresh_catalog, args=(server,), daemon=True,
+            name="mcp-catalog-%s" % server,
+        ).start()
+    return cached, error
 
 
 def _command_args(schema: Dict[str, Any], doc: str = "") -> Dict[str, str]:
@@ -249,7 +293,8 @@ def _execute(op: str, target: str, payload: Dict[str, Any], ctx: Dict[str, Any])
     command = str(payload.get("command") or "").strip()
     if not command:
         return {"ok": False, "error": "要调哪个工具（command 必填）"}
-    tools, error = _catalog(server)
+    # 动作路径允许等：冷缓存时误报「没有这个工具」比多等一下糟得多。
+    tools, error = _catalog(server, allow_blocking=True)
     known = {item["name"] for item in tools}
     if command not in known:
         return {
@@ -285,9 +330,59 @@ def _execute(op: str, target: str, payload: Dict[str, Any], ctx: Dict[str, Any])
 
 _REGISTERED = False
 
+# 装 MCP 就是往这个文件里加一行。放在 EV 自己的 data/ 下而不是核心引擎那份
+# .mcp_server_settings.json：那份是核心引擎的对话链路在用，两边读一份会互相
+# 牵制——核心引擎装的未必适合语音（语音一轮预算 1.5 秒），反过来也一样。
+CONFIG_NAME = "mcp_servers.json"
+
+
+def config_path():
+    from common.paths import MUSE_DIR
+
+    return MUSE_DIR / "data" / CONFIG_NAME
+
+
+def load_config() -> Dict[str, Any]:
+    """读配置。文件不在、写坏了都当成「没有 MCP」，不让它挡住启动。"""
+    try:
+        path = config_path()
+        if not path.is_file():
+            return {}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    servers = raw.get("mcpServers") if isinstance(raw.get("mcpServers"), dict) else raw
+    return servers if isinstance(servers, dict) else {}
+
+
+def load_from_config() -> List[str]:
+    """按配置登记。返回真正登记上的名字。
+
+    只认 url 形式（streamable-http）。stdio 形式的 server 要由 EV 拉起子进程并
+    管住它的生死，那是另一件事，不混在这一层做。
+    """
+    loaded = []
+    for name, spec in (load_config() or {}).items():
+        spec = spec if isinstance(spec, dict) else {}
+        if spec.get("enabled") is False:
+            continue
+        url = str(spec.get("url") or "").strip()
+        if not url:
+            continue
+        register_server(
+            name,
+            url,
+            timeout_s=float(spec.get("timeout_s") or CALL_TIMEOUT_S),
+        )
+        loaded.append(str(name))
+    return loaded
+
 
 def ensure_provider() -> None:
-    """把桥挂进对象注册表。纯加法：没登记任何 server 时它什么都不产出。"""
+    """把桥挂进对象注册表并按配置登记。
+
+    纯加法：配置文件不存在时，桥什么都不产出，对现有行为零影响。
+    """
     global _REGISTERED
     if _REGISTERED:
         return
@@ -298,3 +393,13 @@ def ensure_provider() -> None:
         target_prefixes=("mcp.",),
     )
     _REGISTERED = True
+    names = load_from_config()
+    if names:
+        print("[muse] MCP 桥已登记：%s" % "、".join(names), flush=True)
+        # 启动时先在后台把清单取回来。不预热的话，第一轮语音会拿到空清单——
+        # 对象在、命令是空的，模型看着像个坏掉的能力。
+        for name in names:
+            threading.Thread(
+                target=_refresh_catalog, args=(name,), daemon=True,
+                name="mcp-warm-%s" % name,
+            ).start()

@@ -58,6 +58,7 @@ def _stub(monkeypatch, value=None, error="", call_error="", delay=0.0, calls=Non
 def test_tools_become_commands_and_argument_shapes(monkeypatch):
     _stub(monkeypatch)
     mcp_bridge.register_server("muse-led", "http://127.0.0.1:8012/mcp")
+    mcp_bridge._refresh_catalog("muse-led")   # 启动时预热做的就是这件事
     d = mcp_bridge._descriptor("muse-led")
 
     assert d["target_id"] == "mcp.muse-led"
@@ -76,6 +77,7 @@ def test_the_tool_description_is_carried_over(monkeypatch):
     """
     _stub(monkeypatch)
     mcp_bridge.register_server("muse-led", "http://127.0.0.1:8012/mcp")
+    mcp_bridge._refresh_catalog("muse-led")
     shape = mcp_bridge._descriptor("muse-led")["command_args"]["led_brightness"]
     assert "0 到 100" in shape["说明"]
 
@@ -200,3 +202,73 @@ def test_usage_only_counts_real_actions():
     oreg.object_registry.execute("inspect", "app.timer", {}, {})
     assert oreg.usage_rank("app.timer") == 0.0
     oreg.reset_usage()
+
+
+def test_the_catalog_never_blocks_the_turn(monkeypatch):
+    """清单每轮都要读，绝不能在读的时候等网络。
+
+    实测一个连不上设备的 MCP，单次往返 2.5 秒；而一轮语音的总预算才 1.5 秒。
+    过期就先给旧的、后台去取新的——慢的那一下不能砸在用户那一轮上。
+    """
+    import threading
+
+    _stub(monkeypatch, delay=0.6)
+    mcp_bridge.register_server("muse-led", "http://127.0.0.1:8012/mcp")
+    mcp_bridge._refresh_catalog("muse-led")          # 先有一份旧的
+
+    with mcp_bridge._LOCK:
+        mcp_bridge._SERVERS["muse-led"]["tools_at"] = 0.0   # 让它过期
+
+    started = time.perf_counter()
+    tools, _ = mcp_bridge._catalog("muse-led")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.2, "读清单等了 %.2fs，说明还在关键路径上取" % elapsed
+    assert [t["name"] for t in tools] == ["led_power", "led_brightness"], "过期时该先给旧的"
+    for thread in threading.enumerate():          # 后台确实去取了
+        if thread.name.startswith("mcp-catalog-"):
+            thread.join(2.0)
+
+
+def test_config_file_absent_means_no_mcp_at_all(monkeypatch, tmp_path):
+    """纯加法：没有配置文件时，桥对世界一无所增。"""
+    monkeypatch.setattr(mcp_bridge, "config_path", lambda: tmp_path / "nope.json")
+    assert mcp_bridge.load_config() == {}
+    assert mcp_bridge.load_from_config() == []
+
+
+def test_a_broken_config_does_not_block_startup(monkeypatch, tmp_path):
+    """配置写坏了当成「没有 MCP」，不能让它挡住整个服务起不来。"""
+    path = tmp_path / "mcp_servers.json"
+    path.write_text("{ 这不是 json", encoding="utf-8")
+    monkeypatch.setattr(mcp_bridge, "config_path", lambda: path)
+    assert mcp_bridge.load_config() == {}
+
+
+def test_config_registers_url_servers_and_honours_enabled(monkeypatch, tmp_path):
+    import json as _json
+
+    path = tmp_path / "mcp_servers.json"
+    path.write_text(_json.dumps({"mcpServers": {
+        "muse-led": {"url": "http://127.0.0.1:8012/mcp"},
+        "chrome": {"url": "http://127.0.0.1:9222/mcp", "enabled": False},
+        "wechat": {"command": "npx wechat-mcp"},
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mcp_bridge, "config_path", lambda: path)
+
+    loaded = mcp_bridge.load_from_config()
+    assert loaded == ["muse-led"], "关掉的不装；stdio 形式的这一层不管"
+
+
+def test_a_cold_catalog_does_not_make_invoke_claim_the_tool_is_missing(monkeypatch):
+    """清单还没取回来时 invoke 要等一下，不能说「没有这个工具」。
+
+    那是把自己的时序问题说成对方的能力缺失——用户会以为装的 MCP 坏了。
+    """
+    _stub(monkeypatch, value={"ok": True, "text": "已开灯"})
+    mcp_bridge.register_server("muse-led", "http://127.0.0.1:8012/mcp")
+    # 故意不预热
+    result = mcp_bridge._execute(
+        "invoke", "mcp.muse-led", {"command": "led_power", "args": {"on": True}}, {},
+    )
+    assert result["ok"] is True, "冷缓存把真实存在的工具误判成不存在"

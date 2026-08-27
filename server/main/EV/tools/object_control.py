@@ -768,6 +768,10 @@ def ensure_builtin_provider() -> None:
     # 搜索结果作为可打开对象（result.N）独立注册，与内置 provider 互不影响
     from tools import search_objects
     search_objects.ensure_provider()
+    # 外部 MCP 服务按 data/mcp_servers.json 登记。没有那个文件时桥什么都不产出，
+    # 所以这行对现有行为零影响；装一个 MCP 就是往那个文件里加一行。
+    from tools import mcp_bridge
+    mcp_bridge.ensure_provider()
 
 
 def _lang_of(text) -> str:
