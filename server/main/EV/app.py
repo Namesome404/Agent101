@@ -104,6 +104,7 @@ from routes_admin import router as admin_router
 from routes_core import router as core_router
 from routes_tts import router as tts_router
 from routes_skills import router as skills_router
+from routes_forms import router as forms_router
 from routes_devices import router as devices_router
 from routes_devices import _prewarm_agent
 
@@ -2222,6 +2223,7 @@ app.include_router(admin_router)
 app.include_router(core_router)
 app.include_router(tts_router)
 app.include_router(skills_router)
+app.include_router(forms_router)
 app.include_router(devices_router)
 
 
