@@ -272,3 +272,74 @@ def test_a_cold_catalog_does_not_make_invoke_claim_the_tool_is_missing(monkeypat
         "invoke", "mcp.muse-led", {"command": "led_power", "args": {"on": True}}, {},
     )
     assert result["ok"] is True, "冷缓存把真实存在的工具误判成不存在"
+
+
+def test_only_whitelisted_tools_reach_the_voice_layer(monkeypatch):
+    """语音一轮预算约 1.5 秒，只装得下「一次调用就有确定回执」的能力。
+
+    Chrome 的「开标签页」属于这一类，「排查控制台报错」要看日志、改代码、再验证，
+    多轮。这两类常常来自同一个 MCP 服务，所以判据必须落在单个工具上。
+    """
+    _stub(monkeypatch)
+    mcp_bridge.register_server(
+        "muse-led", "http://x/mcp", voice_tools=["led_power"],
+    )
+    mcp_bridge._refresh_catalog("muse-led")
+    d = mcp_bridge._descriptor("muse-led")
+
+    assert d["commands"] == ["led_power"]
+    assert d["state"]["tools"] == 1
+    assert d["state"]["work_only"] == 1, "没进语音层的要如实报数"
+    assert mcp_bridge.all_tools("muse-led") == ["led_power", "led_brightness"], \
+        "全量清单不该被过滤掉——写白名单要照着它写"
+
+
+def test_exclude_drops_a_few_from_everything(monkeypatch):
+    _stub(monkeypatch)
+    mcp_bridge.register_server("muse-led", "http://x/mcp", exclude=["led_brightness"])
+    mcp_bridge._refresh_catalog("muse-led")
+    assert mcp_bridge._descriptor("muse-led")["commands"] == ["led_power"]
+
+
+def test_no_tiering_means_everything_is_voice(monkeypatch):
+    """不写分层就是全给——已经装好的 MCP 不因为加了这个功能而变哑。"""
+    _stub(monkeypatch)
+    mcp_bridge.register_server("muse-led", "http://x/mcp")
+    mcp_bridge._refresh_catalog("muse-led")
+    d = mcp_bridge._descriptor("muse-led")
+    assert d["commands"] == ["led_power", "led_brightness"]
+    assert d["state"]["work_only"] == 0
+
+
+def test_a_work_layer_tool_is_refused_differently_from_a_missing_one(monkeypatch):
+    """「存在但不归语音」和「压根没有」要分开说。
+
+    说成「没有」，模型会换个名字接着猜；说清楚归工作 Agent，它才知道该交出去。
+    """
+    _stub(monkeypatch)
+    mcp_bridge.register_server("muse-led", "http://x/mcp", voice_tools=["led_power"])
+    mcp_bridge._refresh_catalog("muse-led")
+
+    work = mcp_bridge._execute(
+        "invoke", "mcp.muse-led", {"command": "led_brightness", "args": {}}, {},
+    )
+    missing = mcp_bridge._execute(
+        "invoke", "mcp.muse-led", {"command": "led_disco", "args": {}}, {},
+    )
+    assert work["ok"] is False and "工作 Agent" in work["error"]
+    assert missing["ok"] is False and "没有" in missing["error"]
+
+
+def test_config_carries_the_tiering(monkeypatch, tmp_path):
+    import json as _json
+
+    path = tmp_path / "mcp_servers.json"
+    path.write_text(_json.dumps({"mcpServers": {
+        "chrome": {"url": "http://x/mcp",
+                   "voice_tools": ["new_page", "close_page"]},
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mcp_bridge, "config_path", lambda: path)
+    mcp_bridge.load_from_config()
+
+    with mcp_bridge._LOCK:
+        assert mcp_bridge._SERVERS["chrome"]["voice_tools"] == ["new_page", "close_page"]
