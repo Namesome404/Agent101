@@ -50,6 +50,38 @@ def _display_of(item: Dict[str, Any]) -> str:
     return "、".join(bits)[:120]
 
 
+# ---- 谁常被用：决定参数形状进不进提示词 ----------------------------------
+# 参数形状那份投影有字符预算，装不下的对象只能被折叠成「用到时先 inspect」。
+# 原先按 target_id 字母序取舍，于是新接进来的 mcp.* 排在最后、第一个被挤掉——
+# 接了个能力，参数清单却进不了提示词，这是最糟的结果。
+# 改成按用量排序：常用的一直带着，冷门的让位。用量在内存里，进程重启后从零
+# 开始，第一次用完就会排到前面。
+_USAGE: Dict[str, float] = {}
+_USAGE_LOCK = threading.Lock()
+_USAGE_DECAY = 0.98  # 每次记账时旧分轻微衰减，让「最近常用」压过「历史用过」
+
+
+def note_object_used(target: str) -> None:
+    """记一次真实使用。只在 apply/invoke/adjust 上记，inspect 不算。"""
+    key = str(target or "").strip().lower()
+    if not key:
+        return
+    with _USAGE_LOCK:
+        for other in list(_USAGE):
+            _USAGE[other] *= _USAGE_DECAY
+        _USAGE[key] = _USAGE.get(key, 0.0) + 1.0
+
+
+def usage_rank(target: str) -> float:
+    with _USAGE_LOCK:
+        return _USAGE.get(str(target or "").strip().lower(), 0.0)
+
+
+def reset_usage() -> None:
+    with _USAGE_LOCK:
+        _USAGE.clear()
+
+
 def _public_view(item: Dict[str, Any]) -> Dict[str, Any]:
     """给模型看的描述符：去掉 provider 与 adjustable 的服务端接线字段。"""
     view = dict(item)
@@ -419,6 +451,7 @@ class ObjectCapabilityRegistry:
         operation = str(op or "").strip().lower()
         if operation == "inspect":
             return self.inspect(target, (payload or {}).get("selector"))
+        note_object_used(target)
         if operation == "adjust":
             return self._adjust(target, payload or {}, ctx or {})
         if operation not in {"apply", "invoke"}:

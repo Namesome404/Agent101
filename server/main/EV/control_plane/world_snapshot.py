@@ -181,8 +181,16 @@ def capability_hint(*, max_chars: int = 1200) -> str:
         objects = object_registry.world()
     except Exception:
         return ""
+    # 常用的排前面：预算装不下时先牺牲冷门的。按字母序取舍会让新接进来的
+    # mcp.* 排最后、第一个被挤掉——接了个能力参数清单却进不了提示词。
+    from control_plane.object_registry import usage_rank
+
+    def _order(obj):
+        target = str(obj.get("target_id") or "")
+        return (-usage_rank(target), target)
+
     lines = []
-    for obj in sorted(objects or [], key=lambda o: str(o.get("target_id") or "")):
+    for obj in sorted(objects or [], key=_order):
         shapes = obj.get("command_args") if isinstance(obj.get("command_args"), dict) else {}
         shapes = {k: v for k, v in shapes.items() if v}
         if not shapes:

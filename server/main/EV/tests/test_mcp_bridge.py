@@ -161,3 +161,42 @@ def test_a_hung_server_cannot_eat_the_turn():
 def test_registering_nothing_produces_nothing():
     """纯加法：没登记任何 server 时，桥对世界一无所增。"""
     assert mcp_bridge._discover() == []
+
+
+def test_frequently_used_objects_keep_their_argument_shapes(monkeypatch):
+    """参数形状的预算有限，装不下时要牺牲冷门的，不是牺牲新来的。
+
+    原先按 target_id 字母序取舍，新接进来的 mcp.* 排最后、第一个被挤掉——
+    接了个能力，参数清单却进不了提示词，模型只能靠 inspect 多跑一个来回。
+    """
+    from control_plane import object_registry as oreg, world_snapshot
+
+    _stub(monkeypatch)
+    mcp_bridge.ensure_provider()
+    mcp_bridge.register_server("muse-led", "http://127.0.0.1:8012/mcp")
+
+    def listed():
+        hint = world_snapshot.capability_hint(max_chars=260)
+        return [line[2:].split("（")[0] for line in hint.splitlines() if line.startswith("- ")]
+
+    oreg.reset_usage()
+    cold = listed()
+
+    oreg.note_object_used("mcp.muse-led")
+    oreg.note_object_used("mcp.muse-led")
+    warm = listed()
+
+    assert warm[0] == "mcp.muse-led", "用过的对象没排到前面：%s" % warm
+    if "mcp.muse-led" not in cold:
+        assert "mcp.muse-led" in warm, "常用对象仍被挤掉"
+    oreg.reset_usage()
+
+
+def test_usage_only_counts_real_actions():
+    """只读的 inspect 不算用量，否则模型每次翻目录都会把排序搅乱。"""
+    from control_plane import object_registry as oreg
+
+    oreg.reset_usage()
+    oreg.object_registry.execute("inspect", "app.timer", {}, {})
+    assert oreg.usage_rank("app.timer") == 0.0
+    oreg.reset_usage()
