@@ -24,16 +24,20 @@ config.yaml 一个待遇）。格式：
           "url": "http://127.0.0.1:9222/mcp",
           "voice_tools": ["new_page", "close_page", "take_screenshot"]
         },
-        "wechat": {"url": "http://127.0.0.1:8020/mcp", "exclude": ["export_all"]}
+        "chrome-dev": {
+          "command": "npx",
+          "args": ["-y", "chrome-devtools-mcp@latest", "--isolated"],
+          "voice_tools": ["new_page", "navigate_page", "close_page"]
+        }
       }
     }
+
+两种形式都认：写 url 的是 streamable-http，每次新建会话；写 command 的是 stdio，
+EV 把它拉起来常驻——npx 冷启动要好几秒，每次重开扛不住反射层 1.5 秒的预算。
 
 voice_tools 是白名单：只有列出来的给语音看，其余留给工作 Agent。不写就是全给。
 exclude 是黑名单：从全给里剔掉几个。写白名单之前先看启动日志，它会把每个服务的
 全量工具名打出来、并标明哪些没进语音层。
-
-只认 url 形式（streamable-http）。stdio 形式的 server 要由 EV 拉起子进程并管住
-它的生死，那是另一件事，不混在这一层做。
 
 超时是这一层的生命线，不是可选项。反射层的全部价值是一个来回约 1.5 秒；桥连的
 是另一个进程，它卡住就把整轮语音的预算吃光。所以：每次调用都带硬超时，超时即
@@ -71,8 +75,11 @@ def _target_prefix(server: str) -> str:
 
 def register_server(
     name: str,
-    url: str,
+    url: str = "",
     *,
+    command: str = "",
+    args: Optional[List[str]] = None,
+    env: Optional[Dict[str, str]] = None,
     timeout_s: float = CALL_TIMEOUT_S,
     voice_tools: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
@@ -98,6 +105,9 @@ def register_server(
         _SERVERS[server] = {
             "name": server,
             "url": str(url or "").strip(),
+            "command": str(command or "").strip(),
+            "args": [str(a) for a in (args or [])],
+            "env": {str(k): str(v) for k, v in (env or {}).items()},
             "timeout_s": float(timeout_s or CALL_TIMEOUT_S),
             "voice_tools": [str(t).strip() for t in (voice_tools or []) if str(t).strip()],
             "exclude": [str(t).strip() for t in (exclude or []) if str(t).strip()],
@@ -140,6 +150,157 @@ def forget_all() -> None:
     """测试用：清空登记。"""
     with _LOCK:
         _SERVERS.clear()
+
+
+def _unpack(action: str, result: Any) -> Any:
+    """把 MCP 的返回压成桥内部那两种形状。list 与 call 共用。"""
+    if action == "list":
+        return [
+            {
+                "name": str(item.name),
+                "description": str(item.description or ""),
+                "schema": dict(item.inputSchema or {}),
+            }
+            for item in (result.tools or [])
+        ]
+    parts = []
+    for block in (result.content or []):
+        text = getattr(block, "text", None)
+        if text:
+            parts.append(str(text))
+    return {
+        "ok": not bool(getattr(result, "isError", False)),
+        "text": "\n".join(parts)[:4000],
+    }
+
+
+class _StdioSession:
+    """一个常驻的 stdio MCP 子进程。
+
+    stdio 形式的 server（chrome-devtools-mcp、多数 npx 起的那种）没有网址，
+    只能由我们把它拉起来、按管道说话。关键是**进程必须常驻**：每次调用都
+    npx 一遍要好几秒，反射层一轮预算才 1.5 秒，根本扛不住。
+
+    实现用 anyio 的 blocking portal：一个后台线程跑事件循环，把会话开着；
+    外面的同步代码通过 portal 提交任务，拿 concurrent.futures.Future，
+    于是超时仍然由调用方说了算——卡住的子进程不能把这一轮拖没。
+    """
+
+    def __init__(self, name: str, command: str, args: List[str], env: Dict[str, str]):
+        self.name = name
+        self.command = command
+        self.args = list(args or [])
+        self.env = dict(env or {})
+        self._portal_cm = None
+        self._portal = None
+        self._stdio_cm = None
+        self._session_cm = None
+        self._session = None
+        self._lock = threading.Lock()
+
+    def _start_locked(self, timeout_s: float) -> str:
+        import os
+
+        from anyio.from_thread import start_blocking_portal
+        from mcp import ClientSession
+        from mcp.client.stdio import StdioServerParameters, stdio_client
+
+        params = StdioServerParameters(
+            command=self.command,
+            args=self.args,
+            # 子进程要继承 PATH 才找得到 npx/node；只把配置里写的覆盖上去。
+            env=dict(os.environ, **self.env),
+        )
+        self._portal_cm = start_blocking_portal()
+        self._portal = self._portal_cm.__enter__()
+        self._stdio_cm = self._portal.wrap_async_context_manager(stdio_client(params))
+        read, write = self._stdio_cm.__enter__()
+        self._session_cm = self._portal.wrap_async_context_manager(ClientSession(read, write))
+        self._session = self._session_cm.__enter__()
+        future = self._portal.start_task_soon(self._session.initialize)
+        future.result(timeout=timeout_s)
+        return ""
+
+    def _stop_locked(self) -> None:
+        for closer in (self._session_cm, self._stdio_cm):
+            try:
+                if closer is not None:
+                    closer.__exit__(None, None, None)
+            except Exception:
+                pass
+        try:
+            if self._portal_cm is not None:
+                self._portal_cm.__exit__(None, None, None)
+        except Exception:
+            pass
+        self._portal_cm = self._portal = None
+        self._stdio_cm = self._session_cm = self._session = None
+
+    def call(self, timeout_s: float, action: str, **kwargs) -> Tuple[Any, str]:
+        with self._lock:
+            if self._session is None:
+                try:
+                    self._start_locked(timeout_s)
+                except Exception as exc:
+                    self._stop_locked()
+                    return None, "启动失败 %s: %s" % (type(exc).__name__, str(exc)[:180])
+            session, portal = self._session, self._portal
+            try:
+                if action == "list":
+                    future = portal.start_task_soon(session.list_tools)
+                else:
+                    future = portal.start_task_soon(
+                        session.call_tool, kwargs["tool"], kwargs.get("args") or {},
+                    )
+                return _unpack(action, future.result(timeout=timeout_s)), ""
+            except Exception as exc:
+                # 超时也好、管道断了也好，都把会话丢掉重来：半死的 stdio 连接
+                # 修不回来，留着只会让接下来每次调用都吃一个超时。
+                self._stop_locked()
+                name = type(exc).__name__
+                if name in ("TimeoutError", "FuturesTimeoutError"):
+                    return None, "超时（%.1fs）" % timeout_s
+                return None, "%s: %s" % (name, str(exc)[:180])
+
+
+_STDIO: Dict[str, _StdioSession] = {}
+_ATEXIT_HOOKED = False
+
+
+def shutdown_stdio() -> None:
+    """收掉所有常驻子进程。
+
+    必须有这一步：blocking portal 的线程不是 daemon，会话开着的时候解释器
+    退不掉——实测一个脚本取完清单就卡死在那儿不返回。EV 是长驻服务，
+    真让它关不掉就成了要 kill -9 的东西。
+    """
+    with _LOCK:
+        items = list(_STDIO.values())
+        _STDIO.clear()
+    for item in items:
+        try:
+            with item._lock:
+                item._stop_locked()
+        except Exception:
+            pass
+
+
+def _stdio_session(server: str, meta: Dict[str, Any]) -> _StdioSession:
+    global _ATEXIT_HOOKED
+    with _LOCK:
+        item = _STDIO.get(server)
+        if item is None:
+            item = _StdioSession(
+                server, meta["command"], meta.get("args") or [], meta.get("env") or {},
+            )
+            _STDIO[server] = item
+        hook = not _ATEXIT_HOOKED
+        _ATEXIT_HOOKED = True
+    if hook:
+        import atexit
+
+        atexit.register(shutdown_stdio)
+    return item
 
 
 def _call_blocking(url: str, timeout_s: float, action: str, **kwargs) -> Tuple[Any, str]:
@@ -198,20 +359,42 @@ def _call_blocking(url: str, timeout_s: float, action: str, **kwargs) -> Tuple[A
     return box.get("value"), ""
 
 
+def _talk(server: str, timeout_s: float, action: str, **kwargs) -> Tuple[Any, str]:
+    """跟一个 server 说一次话。上层不必知道它是 http 还是 stdio。
+
+    http：每次新建会话（无状态、便宜）。
+    stdio：常驻子进程（npx 冷启动要好几秒，每次重开扛不住反射层的预算）。
+    """
+    with _LOCK:
+        meta = dict(_SERVERS.get(server) or {})
+    if not meta:
+        return None, "未登记"
+    if meta.get("command"):
+        return _stdio_session(server, meta).call(timeout_s, action, **kwargs)
+    return _call_blocking(meta["url"], timeout_s, action, **kwargs)
+
+
 def _refresh_catalog(server: str) -> None:
-    """去取一次清单并写回缓存。只在后台线程里跑。"""
+    """去取一次清单并写回缓存。只在后台线程里跑。
+
+    已经有人在取时直接返回。想等那一次的结果，用 _wait_refresh。
+    """
     with _LOCK:
         meta = _SERVERS.get(server)
         if not meta or meta.get("refreshing"):
             return
         meta["refreshing"] = True
-        url, timeout_s = meta["url"], meta["timeout_s"]
-    tools, error = _call_blocking(url, timeout_s, "list")
+        meta["refresh_done"] = threading.Event()
+        timeout_s = meta["timeout_s"]
+    tools, error = _talk(server, timeout_s, "list")
     with _LOCK:
         meta = _SERVERS.get(server)
         if not meta:
             return
         meta["refreshing"] = False
+        done = meta.get("refresh_done")
+        if done is not None:
+            done.set()
         if error:
             meta["reachable"] = False
             meta["error"] = error
@@ -248,7 +431,16 @@ def _catalog(server: str, *, allow_blocking: bool = False) -> Tuple[List[Dict[st
         need = not fresh and not cooling and not meta.get("refreshing")
         never_fetched = meta["tools"] is None
     if allow_blocking and never_fetched and not cooling:
-        _refresh_catalog(server)
+        # 已经有人在取（多半是启动时的预热）就等那一次，别自己再发一次也别
+        # 空手而归——空手而归就是「没有这个工具」，用户会以为装的 MCP 坏了。
+        with _LOCK:
+            meta = _SERVERS.get(server) or {}
+            pending = meta.get("refresh_done") if meta.get("refreshing") else None
+            wait_s = float(meta.get("timeout_s") or CALL_TIMEOUT_S)
+        if pending is not None:
+            pending.wait(wait_s)
+        else:
+            _refresh_catalog(server)
         with _LOCK:
             meta = _SERVERS.get(server) or {}
             return list(meta.get("tools") or []), str(meta.get("error") or "")
@@ -369,9 +561,7 @@ def _execute(op: str, target: str, payload: Dict[str, Any], ctx: Dict[str, Any])
         }
 
     args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
-    value, error = _call_blocking(
-        meta["url"], meta["timeout_s"], "call", tool=command, args=args,
-    )
+    value, error = _talk(server, meta["timeout_s"], "call", tool=command, args=args)
     if error:
         with _LOCK:
             live = _SERVERS.get(server)
@@ -382,13 +572,20 @@ def _execute(op: str, target: str, payload: Dict[str, Any], ctx: Dict[str, Any])
         # 明确说没做成。没有回执就没有 after 可复述，播报规则会挡住
         # 「已经做好了」这种话。
         return {"ok": False, "changed": False, "error": error, "target_id": target}
+    text = str((value or {}).get("text") or "")
     return {
         "ok": bool((value or {}).get("ok")),
         "changed": bool((value or {}).get("ok")),
         "target_id": target,
         "target_name": server,
         "command": command,
-        "after": str((value or {}).get("text") or "")[:600],
+        # 工具自己说的那句就是「现在什么样」，填 display 而不是 after：
+        # 注册表统一算 after，provider 报了 display 才用它，否则会回头重查
+        # 对象目录、把「reachable=是、tools=5」这种状态摘要当成结果播出去。
+        "display": " ".join(text.split())[:120],
+        # 完整输出给模型看（页面 id、网址、控制台内容都在这儿），
+        # 播报只用上面那句短的。
+        "text": text[:1200],
     }
 
 
@@ -422,8 +619,7 @@ def load_config() -> Dict[str, Any]:
 def load_from_config() -> List[str]:
     """按配置登记。返回真正登记上的名字。
 
-    只认 url 形式（streamable-http）。stdio 形式的 server 要由 EV 拉起子进程并
-    管住它的生死，那是另一件事，不混在这一层做。
+    url 与 command 两种形式都认。
     """
     loaded = []
     for name, spec in (load_config() or {}).items():
@@ -431,11 +627,15 @@ def load_from_config() -> List[str]:
         if spec.get("enabled") is False:
             continue
         url = str(spec.get("url") or "").strip()
-        if not url:
+        command = str(spec.get("command") or "").strip()
+        if not url and not command:
             continue
         register_server(
             name,
             url,
+            command=command,
+            args=spec.get("args") or [],
+            env=spec.get("env") or {},
             timeout_s=float(spec.get("timeout_s") or CALL_TIMEOUT_S),
             voice_tools=spec.get("voice_tools") or [],
             exclude=spec.get("exclude") or [],

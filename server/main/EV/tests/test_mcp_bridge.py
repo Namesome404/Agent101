@@ -123,7 +123,8 @@ def test_invoke_returns_a_receipt(monkeypatch):
         {"command": "led_brightness", "args": {"brightness": 40}}, {},
     )
     assert result["ok"] is True and result["changed"] is True
-    assert "40%" in result["after"]
+    # 工具输出填 display，注册表据此算 after（见 test_the_tool_output_becomes_the_receipt）
+    assert "40%" in result["display"]
 
 
 def test_an_unknown_tool_is_refused_with_the_real_list(monkeypatch):
@@ -252,12 +253,14 @@ def test_config_registers_url_servers_and_honours_enabled(monkeypatch, tmp_path)
     path.write_text(_json.dumps({"mcpServers": {
         "muse-led": {"url": "http://127.0.0.1:8012/mcp"},
         "chrome": {"url": "http://127.0.0.1:9222/mcp", "enabled": False},
-        "wechat": {"command": "npx wechat-mcp"},
+        "wechat": {"command": "npx", "args": ["wechat-mcp"]},
+        "空的": {},
     }}), encoding="utf-8")
     monkeypatch.setattr(mcp_bridge, "config_path", lambda: path)
 
     loaded = mcp_bridge.load_from_config()
-    assert loaded == ["muse-led"], "关掉的不装；stdio 形式的这一层不管"
+    # url 和 command 两种都装；enabled=false 的不装；两样都没写的跳过
+    assert loaded == ["muse-led", "wechat"]
 
 
 def test_a_cold_catalog_does_not_make_invoke_claim_the_tool_is_missing(monkeypatch):
@@ -343,3 +346,88 @@ def test_config_carries_the_tiering(monkeypatch, tmp_path):
 
     with mcp_bridge._LOCK:
         assert mcp_bridge._SERVERS["chrome"]["voice_tools"] == ["new_page", "close_page"]
+
+
+def test_stdio_servers_are_registered_from_config(monkeypatch, tmp_path):
+    """stdio 形式：没有网址，由 EV 把它拉起来。
+
+    chrome-devtools-mcp、多数 npx 起的 MCP 都是这种。实测它有 29 个工具，
+    冷启动（含拉起 Chrome）7.8 秒，之后每次调用 0.01 秒——所以进程必须常驻，
+    每次重开根本扛不住反射层 1.5 秒的预算。
+    """
+    import json as _json
+
+    path = tmp_path / "mcp_servers.json"
+    path.write_text(_json.dumps({"mcpServers": {
+        "chrome-dev": {
+            "command": "npx",
+            "args": ["-y", "chrome-devtools-mcp@latest", "--isolated"],
+            "voice_tools": ["new_page", "close_page"],
+        },
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mcp_bridge, "config_path", lambda: path)
+
+    assert mcp_bridge.load_from_config() == ["chrome-dev"]
+    with mcp_bridge._LOCK:
+        meta = mcp_bridge._SERVERS["chrome-dev"]
+    assert meta["command"] == "npx"
+    assert meta["args"][:2] == ["-y", "chrome-devtools-mcp@latest"]
+    assert meta["url"] == ""
+
+
+def test_a_warm_up_in_flight_does_not_make_invoke_say_the_tool_is_missing(monkeypatch):
+    """启动预热还没跑完时调工具，要等那一次，不能空手而归。
+
+    实测踩过：ensure_provider 起了预热线程，紧接着调 new_page，
+    _refresh_catalog 因为「已经有人在取」直接返回，清单是空的，
+    于是回「chrome-dev 没有 new_page 这个工具」——用户会以为装的 MCP 坏了。
+    """
+    import threading as _t
+
+    started = _t.Event()
+    release = _t.Event()
+
+    def slow(url, timeout_s, action, **kwargs):
+        if action == "list":
+            started.set()
+            release.wait(3)
+            return list(LED_TOOLS), ""
+        return {"ok": True, "text": "done"}, ""
+
+    monkeypatch.setattr(mcp_bridge, "_call_blocking", slow)
+    mcp_bridge.register_server("muse-led", "http://x/mcp")
+
+    warm = _t.Thread(target=mcp_bridge._refresh_catalog, args=("muse-led",), daemon=True)
+    warm.start()
+    started.wait(2)                      # 预热正卡在取清单里
+
+    def do_invoke(box):
+        release.set()                    # 让预热完成
+        box.append(mcp_bridge._execute(
+            "invoke", "mcp.muse-led", {"command": "led_power", "args": {"on": True}}, {},
+        ))
+
+    box = []
+    caller = _t.Thread(target=do_invoke, args=(box,), daemon=True)
+    caller.start()
+    caller.join(6)
+    warm.join(3)
+
+    assert box and box[0]["ok"] is True, "预热在跑时把真实存在的工具误判成不存在"
+
+
+def test_the_tool_output_becomes_the_receipt(monkeypatch):
+    """工具自己说的那句要填 display。
+
+    注册表统一算 after：provider 报了 display 才用它，否则会回头重查对象目录，
+    把「reachable=是、tools=5」这种状态摘要当成结果播给用户。
+    """
+    _stub(monkeypatch, value={"ok": True, "text": "## Pages\n1: Example (https://example.com/)"})
+    mcp_bridge.register_server("muse-led", "http://x/mcp")
+    mcp_bridge._refresh_catalog("muse-led")
+    r = mcp_bridge._execute(
+        "invoke", "mcp.muse-led", {"command": "led_power", "args": {"on": True}}, {},
+    )
+    assert "example.com" in r["display"]
+    assert "\n" not in r["display"], "播报那句要压成一行"
+    assert "## Pages" in r["text"], "完整输出仍要给模型"
