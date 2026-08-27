@@ -153,6 +153,64 @@ def forget_all() -> None:
         _FORMS.clear()
 
 
+def surface_id_of(form_id: str) -> str:
+    """每张表一扇自己的窗。
+
+    不能让它按网址推导 id——那样所有表都落在同一个 host 上，第二张表会顶掉
+    第一张，两次运行同时提问就互相覆盖。
+    """
+    return "form-%s" % str(form_id or "")[:12]
+
+
+def open_window(form_id: str, *, title: str = "", base_url: str = "") -> Dict[str, Any]:
+    """把表开成一扇窗。
+
+    在这里发起而不是让调用方自己开：声明一张没人看得见的表没有任何用处——
+    发问方会一直等答案，用户屏幕上却什么都没发生。
+
+    走 url 窗口是有意的：那条挂子 webview，页面是普通网页，能直接 fetch 回
+    EV 提交。EV 自己生成的 html 内容窗跑在 sandbox iframe 里，答案传不出来。
+    """
+    import os
+
+    item = get(form_id)
+    if not item:
+        return {"ok": False, "error": "这张表不存在"}
+    root = base_url or os.environ.get("MUSE_URL") or "http://127.0.0.1:%s" % os.environ.get("MUSE_PORT", "8002")
+    try:
+        from tools import surface_control
+
+        _, meta = surface_control.execute({
+            "action": "create",
+            "surface_id": surface_id_of(form_id),
+            "url": "%s/forms/%s" % (root.rstrip("/"), form_id),
+            "title": title or item["title"],
+            "width": 680,
+            "height": 560,
+            "position": "center",
+        })
+        return {
+            "ok": bool(meta.get("ok")),
+            "surface_id": surface_id_of(form_id),
+            "detail": str(meta.get("reason") or meta.get("error") or "")[:120],
+        }
+    except Exception as exc:
+        return {"ok": False, "error": "%s: %s" % (type(exc).__name__, str(exc)[:120])}
+
+
+def close_window(form_id: str) -> Dict[str, Any]:
+    """填完就把窗收走，别留在屏幕上。"""
+    try:
+        from tools import surface_control
+
+        _, meta = surface_control.execute({
+            "action": "close", "surface_id": surface_id_of(form_id),
+        })
+        return {"ok": bool(meta.get("ok"))}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:120]}
+
+
 def render_page(form_id: str) -> str:
     """按字段声明生成页面。
 

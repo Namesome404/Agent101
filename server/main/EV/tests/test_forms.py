@@ -117,3 +117,27 @@ def test_the_page_escapes_what_the_asker_wrote():
 def test_an_expired_form_says_so_instead_of_erroring():
     page = forms.render_page("nope")
     assert "过期" in page
+
+
+def test_each_form_gets_its_own_window():
+    """一张表一扇窗。不能按网址推导 id——所有表都在同一个 host 上，
+    第二张会顶掉第一张，两次运行同时提问就互相覆盖。"""
+    a = forms.declare("A", FIELDS, owner_kind="run", owner_id="work_a")
+    b = forms.declare("B", FIELDS, owner_kind="run", owner_id="work_b")
+    assert forms.surface_id_of(a["form_id"]) != forms.surface_id_of(b["form_id"])
+
+
+def test_opening_a_form_that_does_not_exist_says_so():
+    assert forms.open_window("nope")["ok"] is False
+
+
+def test_closing_the_window_never_breaks_the_submission(monkeypatch):
+    """关窗失败不能连累提交——答案已经收下了，窗口是次要的。"""
+    def boom(*a, **k):
+        raise RuntimeError("桌面壳没连上")
+    monkeypatch.setattr(forms, "close_window", lambda fid: {"ok": False})
+
+    created = forms.declare("开工前确认", FIELDS, owner_kind="run", owner_id="work_1")
+    result = forms.submit(created["form_id"], {"platform": "iOS"})
+    assert result["ok"] is True
+    assert forms.answers_for("run", "work_1")[0]["answers"]["platform"] == "iOS"
